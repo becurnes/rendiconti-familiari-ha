@@ -59,9 +59,7 @@ async function api(endpoint, payload) {
   }
   const body = await response.json();
   if (!response.ok) {
-    const error = new Error(body.error || "Operazione non riuscita.");
-    error.status = response.status;
-    throw error;
+    throw new Error(body.error || "Operazione non riuscita.");
   }
   return body;
 }
@@ -177,8 +175,7 @@ async function refresh() {
     return true;
   } catch (error) {
     if (version === loadVersion) {
-      if (error.status === 401) showAccess();
-      else showMessage($("#notice"), error.message);
+      showMessage($("#notice"), error.message);
     }
     return false;
   }
@@ -505,49 +502,6 @@ function downloadReceipt() {
   showMessage($("#notice"), "Apri il file .rendiconto scaricato in ScontrinoStudio sul Mac.");
 }
 
-function showAccess() {
-  data = { people: [], expenses: [], payments: [], months: [], arrears: [] };
-  clearBank();
-  document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
-  $("#receipt").replaceChildren();
-  draw();
-  showMessage($("#notice"), "");
-  $("#app").hidden = true;
-  $("#access").hidden = false;
-  $("#access-form").elements.password.focus();
-}
-
-async function signIn(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const submit = $('button[type="submit"]', form);
-  if (submit.disabled) return;
-  submit.disabled = true;
-  showMessage($(".form-error", form), "");
-  try {
-    await api("login", { password: form.elements.password.value });
-    form.reset();
-    $("#access").hidden = true;
-    $("#app").hidden = false;
-    $("#logout").hidden = false;
-    await refresh();
-  } catch (error) {
-    showMessage($(".form-error", form), error.message);
-  } finally {
-    submit.disabled = false;
-  }
-}
-
-async function signOut() {
-  try {
-    await api("logout", {});
-    ++loadVersion;
-    showAccess();
-  } catch (error) {
-    showMessage($("#notice"), error.message);
-  }
-}
-
 $("#previous").onclick = () => moveMonth(-1);
 $("#next").onclick = () => moveMonth(1);
 monthInput.onchange = () => setMonth(monthInput.value);
@@ -612,18 +566,10 @@ $("#print-open").onclick = () => {
 };
 $("#print-form").onsubmit = printReceipt;
 $("#scontrinostudio").onclick = downloadReceipt;
-$("#logout").onclick = signOut;
-$("#access-form").onsubmit = signIn;
 document.querySelectorAll("dialog .close").forEach(control => {
   control.onclick = () => control.closest("dialog").close();
 });
 monthInput.value = month;
 $("#period").textContent = monthLabel(month);
-api("session").then(session => {
-  $("#logout").hidden = !session.direct;
-  return refresh();
-}).catch(error => {
-  if (error.status === 401) showAccess();
-  else showMessage($("#notice"), error.message);
-});
 createActions.forEach(selector => { $(selector).disabled = true; });
+refresh();

@@ -1,0 +1,62 @@
+name: Verifica add-on
+
+on:
+  pull_request:
+  push:
+    branches: [main, "sicurezza/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verifica add-on
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build dell’immagine e verifiche applicative
+        run: |
+          docker build -t rendiconti-test ./rendiconti_familiari
+          docker run --rm --entrypoint python3 -v "$PWD:/repo:ro" -w /repo \
+            rendiconti-test -B -m unittest discover -s tests -v
+          node --check rendiconti_familiari/app.js
+      - name: Aggiornamento di un volume esistente e accesso Ingress
+        run: |
+          set -euo pipefail
+          docker volume create rendiconti-test-data
+          docker network create --subnet 172.30.32.0/24 rendiconti-test-net
+          docker run --rm -i --entrypoint python3 -v rendiconti-test-data:/data rendiconti-test - <<'PY'
+          import json
+          import server
+          from pathlib import Path
+
+          root = Path("/data")
+          server.init_db()
+          with server.database() as db:
+              server.save_expense(db, {
+                  "month": "2026-10", "day": "2026-10-05",
+                  "description": "Spesa preesistente", "cents": 999, "people": [1, 2],
+              })
+          (root / "options.json").write_text(json.dumps({
+              "utente_autorizzato": "titolare", "password_accesso_diretto": "obsoleta-di-test",
+          }))
+          (root / "enablebanking.json").write_text('{"application":"configurazione-preesistente"}')
+          PY
+          docker run -d --name rendiconti-app --network rendiconti-test-net --ip 172.30.32.10 \
+            -v rendiconti-test-data:/data rendiconti-test
+          test "$(docker image inspect --format '{{json .Config.ExposedPorts}}' rendiconti-test)" = '{"8099/tcp":{}}'
+          docker run --rm --network rendiconti-test-net --ip 172.30.32.2 --entrypoint /usr/bin/curl \
+            rendiconti-test --retry 5 --retry-connrefused --retry-delay 1 --max-time 10 -fsS \
+            -H 'X-Remote-User-Name: titolare' http://172.30.32.10:8099/api/month?month=2026-10 | \
+            python3 -c 'import json, sys; assert json.load(sys.stdin)["expenses"][0]["cents"] == 999'
+          status=$(docker run --rm --network rendiconti-test-net --ip 172.30.32.3 --entrypoint /usr/bin/curl \
+            rendiconti-test --max-time 5 -s -o /dev/null -w '%{http_code}' \
+            -H 'X-Remote-User-Name: titolare' http://172.30.32.10:8099/)
+          test "$status" = 403
+          docker exec rendiconti-app python3 -c 'import pathlib, socket; p = pathlib.Path; assert p("/data/enablebanking.json").read_text() == """{"application":"configurazione-preesistente"}"""; assert "Uid:\t10001\t10001\t10001\t10001" in p("/proc/1/status").read_text(); assert p("/data/rendiconti.sqlite3").stat().st_mode & 0o777 == 0o600; assert not p("/ssl").exists(); sock = socket.socket(); assert sock.connect_ex(("127.0.0.1", 8100)) != 0'
+      - name: Log del contenitore in caso di errore
+        if: failure()
+        run: docker logs rendiconti-app 2>/dev/null || true

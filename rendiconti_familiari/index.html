@@ -9,14 +9,6 @@
   <script defer src="./app.js"></script>
 </head>
 <body>
-  <main id="access" hidden>
-    <form id="access-form">
-      <h1>Rendiconti familiari</h1>
-      <label>Password di accesso<input name="password" type="password" autocomplete="current-password" maxlength="256" required></label>
-      <p class="form-error" role="alert" hidden></p>
-      <button class="primary" type="submit">Accedi</button>
-    </form>
-  </main>
   <main id="app">
     <header class="top">
       <div>
@@ -35,7 +27,6 @@
       <button id="new-payment" type="button">Registra versamento</button>
       <button id="bank-open" type="button">Importa movimenti</button>
       <button id="print-open" type="button">Stampa</button>
-      <button id="logout" class="plain" type="button" hidden>Esci</button>
     </div>
     <p id="notice" class="notice" role="status" hidden></p>
     <section class="totals" aria-label="Totali del mese" id="totals"></section>

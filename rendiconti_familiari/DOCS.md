@@ -33,15 +33,11 @@ Importo negativo significa uscita. Una colonna **Uscite** può invece contenere 
 
 [Documentazione Home Assistant sulle app locali](https://contributors.home-assistant.io/apps/first-app/) · [Informativa PSD2 di BPER](https://www.bper.it/footer/informative-normative/psd2-la-nuova-normativa-sui-servizi-di-pagamento)
 
-## Accesso diretto da browser
+## Accesso locale e via VPN
 
-La voce **Rendiconti** in Home Assistant continua a usare il login di Home Assistant. Per aprire lo stesso registro in una scheda indipendente:
+Dalla versione 1.4.0 apri **Rendiconti** dal pannello di Home Assistant. Fuori casa connettiti prima alla VPN e apri Home Assistant al suo indirizzo abituale. Usa un indirizzo HTTPS con certificato valido se configurato. Quando la VPN termina sul router, HTTPS protegge anche il tratto tra router e Raspberry.
 
-1. In **Impostazioni → App → Rendiconti familiari → Configurazione**, imposta `password_accesso_diretto` a una password dedicata di almeno 12 caratteri.
-2. Nella sezione **Rete** abilita la porta **8100/tcp** e imposta **8100** come porta host. Salva e riavvia l'app.
-3. Apri `http://homeassistant.local:8100` oppure `http://IP-DEL-RASPBERRY:8100`. Fuori casa usa la VPN e l'IP locale del Raspberry.
-
-La porta parte disattivata. Non inoltrarla sul router. HTTP è adatto solo alla rete domestica fidata o al tunnel VPN. Per usare HTTPS anche in LAN, imposta `https_accesso_diretto` e indica i file del certificato e della chiave presenti in `/ssl`, poi apri il nome host coperto dal certificato. Se il certificato non è valido, l'accesso diretto HTTPS non parte e il pannello Ingress resta disponibile.
+Prima dell’aggiornamento, verifica di poter aprire Home Assistant via VPN e crea un backup cifrato che includa l’app. Mantieni la modalità di protezione attiva. L’aggiornamento conserva database, configurazione bancaria e filtro utente. La vecchia porta diretta 8100 e la relativa password non sono più disponibili. Rimuovi dal router e da eventuali proxy le vecchie regole che pubblicavano l’add-on. Dopo l’aggiornamento verifica l’apertura dal pannello in LAN e via VPN.
 
 ## Stampa con ScontrinoStudio per Mac
 
@@ -53,7 +49,7 @@ Il file contiene le quote, i versamenti e i saldi che hai scelto di stampare. L'
 
 ## BPER tramite Enable Banking
 
-La funzione consulta, su richiesta, le uscite in euro già contabilizzate del mese che stai visualizzando. Per avviarla, apri il rendiconto da Home Assistant, preferibilmente tramite HTTPS o sulla tua VPN. Se usi la porta diretta 8100, i comandi bancari sono disponibili tramite HTTPS.
+La funzione consulta, su richiesta, le uscite in euro già contabilizzate del mese che stai visualizzando. Per avviarla, apri il rendiconto dal pannello Home Assistant. Per un accesso remoto usa la VPN e, quando configurato, l’indirizzo HTTPS di Home Assistant.
 
 ### Prima configurazione
 

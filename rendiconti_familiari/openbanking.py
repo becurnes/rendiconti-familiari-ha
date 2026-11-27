@@ -12,9 +12,7 @@ import time
 from calendar import monthrange
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
 API = "https://api.enablebanking.com"
@@ -22,6 +20,7 @@ AUTHORIZATION_HOSTS = {"auth.enablebanking.com", "tilisy.enablebanking.com"}
 CALLBACK = "https://localhost:28787/rendiconti-bper"
 CALLBACK_ALTERNATIVE = "https://127.0.0.1:28787/rendiconti-bper"
 MAX_CENTS = 99_999_999
+NETWORK_BUDGET_SECONDS = 40
 
 
 class BankError(Exception):
@@ -30,9 +29,15 @@ class BankError(Exception):
         self.expired = expired
 
 
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+class BankBusy(BankError):
+    pass
+
+
+def time_remaining(deadline, maximum):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise BankError("Tempo massimo di risposta di Enable Banking superato. Riprova.")
+    return min(remaining, maximum)
 
 
 def uuid_value(value):
@@ -47,9 +52,9 @@ def encode_part(value):
     return base64.urlsafe_b64encode(value).rstrip(b"=")
 
 
-def openssl(*args, data=None):
+def openssl(*args, data=None, timeout=30):
     try:
-        result = subprocess.run(["openssl", *args], input=data, capture_output=True, timeout=30, check=True)
+        result = subprocess.run(["openssl", *args], input=data, capture_output=True, timeout=timeout, check=True)
     except (OSError, subprocess.SubprocessError):
         raise BankError("Impossibile usare il certificato locale di Enable Banking.") from None
     return result.stdout
@@ -64,16 +69,6 @@ def private_write(path, content):
     finally:
         if os.path.exists(scratch):
             os.unlink(scratch)
-
-
-def read_payload(response, limit):
-    data = response.read(limit + 1)
-    if len(data) > limit:
-        raise BankError("La risposta della banca è troppo grande. Riprova scegliendo un altro mese.")
-    payload = json.loads(data)
-    if not isinstance(payload, dict):
-        raise BankError("Risposta di Enable Banking non riconosciuta.")
-    return payload
 
 
 def normalized_movement(row):
@@ -111,7 +106,6 @@ class OpenBanking:
         self.certificate = data / "enablebanking-public.crt"
         self.state = data / "enablebanking.json"
         self.lock = threading.Lock()
-        self.opener = build_opener(NoRedirect)
 
     def load(self):
         return json.loads(self.state.read_bytes()) if self.state.exists() else {}
@@ -119,42 +113,74 @@ class OpenBanking:
     def save(self, state):
         private_write(self.state, json.dumps(state, separators=(",", ":")).encode())
 
-    def api(self, state, method, path, body=None):
+    def api(self, state, method, path, body=None, *, deadline):
         now = int(time.time())
         header = encode_part({"typ": "JWT", "alg": "RS256", "kid": state["application"]})
         claims = encode_part({"iss": "enablebanking.com", "aud": "api.enablebanking.com",
                               "iat": now, "exp": now + 120})
         unsigned = header + b"." + claims
-        signature = openssl("dgst", "-sha256", "-sign", str(self.key), data=unsigned)
+        signature = openssl("dgst", "-sha256", "-sign", str(self.key), data=unsigned,
+                            timeout=time_remaining(deadline, 10))
         token = (unsigned + b"." + encode_part(signature)).decode()
-        request = Request(API + path, method=method,
-                          data=json.dumps(body).encode() if body is not None else None,
-                          headers={"Authorization": "Bearer " + token, "Accept": "application/json",
-                                   "Content-Type": "application/json"})
+        config = [
+            ("url", API + path),
+            ("header", "Authorization: Bearer " + token),
+            ("header", "Accept: application/json"),
+        ]
+        if body is not None:
+            config.extend([
+                ("header", "Content-Type: application/json"),
+                ("data-binary", json.dumps(body, separators=(",", ":"))),
+            ])
+        # Keep the JWT, callback code and pagination token out of the process arguments.
+        request_config = "".join(f"{key} = {json.dumps(value)}\n" for key, value in config)
+        timeout = time_remaining(deadline, 12)
         try:
-            with self.opener.open(request, timeout=12) as response:
-                return {} if response.status == 204 else read_payload(response, 4_000_000)
-        except HTTPError as error:
-            try:
-                with error:
-                    code = read_payload(error, 30_000).get("code")
-            except (ValueError, OSError, BankError):
-                code = None
+            response = subprocess.run([
+                "/usr/bin/curl", "--disable", "--silent", "--globoff", "--proto", "=https",
+                "--noproxy", "*", "--request", method,
+                "--max-time", f"{timeout:.3f}", "--max-filesize", "4000000",
+                "--write-out", "\n%{http_code}", "--config", "-",
+            ], input=request_config.encode(), capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise BankError("Tempo massimo di risposta di Enable Banking superato. Riprova.") from None
+        except OSError:
+            raise BankError("Impossibile contattare Enable Banking.") from None
+        if response.returncode == 28:
+            raise BankError("Tempo massimo di risposta di Enable Banking superato. Riprova.")
+        if response.returncode == 63:
+            raise BankError("La risposta della banca è troppo grande. Riprova scegliendo un altro mese.")
+        if response.returncode != 0:
+            raise BankError("Enable Banking non risponde o la connessione non è riuscita.")
+        content, separator, raw_status = response.stdout.rpartition(b"\n")
+        if not separator or not re.fullmatch(rb"[1-5][0-9]{2}", raw_status):
+            raise BankError("Risposta di Enable Banking non riconosciuta.")
+        status = int(raw_status)
+        if status == 204:
+            return {}
+        try:
+            payload = json.loads(content)
+        except (ValueError, UnicodeError, RecursionError):
+            payload = None
+        if 200 <= status < 300:
+            if not isinstance(payload, dict):
+                raise BankError("Risposta di Enable Banking non riconosciuta.")
+            return payload
+        code = payload.get("code") if isinstance(payload, dict) else None
+        if isinstance(code, str):
             if code in {"EXPIRED_SESSION", "CLOSED_SESSION", "REVOKED_SESSION", "SESSION_DOES_NOT_EXIST"}:
-                raise BankError("Consenso scaduto o revocato. Ricollega il conto BPER.", expired=True) from None
+                raise BankError("Consenso scaduto o revocato. Ricollega il conto BPER.", expired=True)
             if code == "REDIRECT_URI_NOT_ALLOWED":
-                raise BankError("Abilita in Enable Banking lo stesso URL di rientro selezionato in Rendiconti.") from None
+                raise BankError("Abilita in Enable Banking lo stesso URL di rientro selezionato in Rendiconti.")
             if code in {"EXPIRED_AUTHORIZATION_CODE", "WRONG_AUTHORIZATION_CODE"}:
-                raise BankError("Il codice di rientro non è più valido. Avvia un nuovo collegamento.") from None
-            hint = {
-                400: "Verifica applicazione, URL di rientro e configurazione del consenso.",
-                401: "Verifica ID applicazione e certificato registrato.",
-                403: "Verifica che l’applicazione sia attiva e che il conto sia tra quelli collegati.",
-                429: "Attendi prima di riprovare.",
-            }.get(error.code, "Riprova più tardi.")
-            raise BankError(f"Enable Banking ha risposto con errore {error.code}. {hint}") from None
-        except (URLError, TimeoutError, OSError, ValueError):
-            raise BankError("Enable Banking non risponde o ha restituito una risposta non valida.") from None
+                raise BankError("Il codice di rientro non è più valido. Avvia un nuovo collegamento.")
+        hint = {
+            400: "Verifica applicazione, URL di rientro e configurazione del consenso.",
+            401: "Verifica ID applicazione e certificato registrato.",
+            403: "Verifica che l’applicazione sia attiva e che il conto sia tra quelli collegati.",
+            429: "Attendi prima di riprovare.",
+        }.get(status, "Riprova più tardi.")
+        raise BankError(f"Enable Banking ha risposto con errore {status}. {hint}")
 
     def status(self, state):
         session = state.get("session") or {}
@@ -178,13 +204,13 @@ class OpenBanking:
             private_write(self.certificate, certificate)
         return {"pem": self.certificate.read_text()}
 
-    def start(self, state):
+    def start(self, state, deadline):
         if not state.get("application") or not self.key.is_file():
             raise BankError("Genera il certificato, registralo su Enable Banking e salva l’ID applicazione.")
         if state.get("session"):
             raise BankError("Scollega la sessione precedente prima di avviarne un’altra.")
         institutions = self.api(state, "GET", "/aspsps?" + urlencode(
-            {"country": "IT", "psu_type": "personal"})).get("aspsps", [])
+            {"country": "IT", "psu_type": "personal"}), deadline=deadline).get("aspsps", [])
         bank = next((item for item in institutions
                      if item.get("country") == "IT" and item.get("name", "").casefold() == "bper banca"), None)
         if not bank:
@@ -197,7 +223,7 @@ class OpenBanking:
             "access": {"valid_until": expiry},
             "aspsp": {"name": bank["name"], "country": "IT"},
             "state": nonce, "redirect_url": state["redirect"], "psu_type": "personal", "language": "it",
-        })
+        }, deadline=deadline)
         url = response.get("url")
         try:
             parts = urlsplit(url if isinstance(url, str) else "")
@@ -209,7 +235,7 @@ class OpenBanking:
         self.save(state)
         return {"url": url}
 
-    def finish(self, state, data):
+    def finish(self, state, data, deadline):
         pending = state.get("pending", {})
         if pending.get("expires", 0) <= time.time():
             raise BankError("Avvia di nuovo il collegamento. L’autorizzazione in corso è scaduta.")
@@ -230,7 +256,7 @@ class OpenBanking:
         codes = fields.get("code", [])
         if len(codes) != 1 or not re.fullmatch(r"[\x21-\x7e]{1,6000}", codes[0]):
             raise BankError("Il rientro non contiene un codice di autorizzazione valido.")
-        response = self.api(state, "POST", "/sessions", {"code": codes[0]})
+        response = self.api(state, "POST", "/sessions", {"code": codes[0]}, deadline=deadline)
         session_id = uuid_value(response.get("session_id"))
         choices = []
         for index, item in enumerate(response.get("accounts") or []):
@@ -258,7 +284,7 @@ class OpenBanking:
         self.save(state)
         return self.status(state)
 
-    def movements(self, state, data):
+    def movements(self, state, data, deadline):
         session = state.get("session", {})
         account = session.get("account")
         if not account:
@@ -279,7 +305,7 @@ class OpenBanking:
         path = "/accounts/" + account["uid"] + "/transactions?"
         rows, seen, repeats, cursors = [], set(), {}, set()
         for _ in range(12):
-            payload = self.api(state, "GET", path + urlencode(query))
+            payload = self.api(state, "GET", path + urlencode(query), deadline=deadline)
             for raw in payload.get("transactions", []):
                 movement = normalized_movement(raw)
                 if not movement:
@@ -309,51 +335,58 @@ class OpenBanking:
         raise BankError("Impossibile completare la lettura di tutte le pagine dei movimenti.")
 
     def dispatch(self, action, data):
-        with self.lock:
-            state = self.load()
-            if action == "status":
-                return self.status(state)
-            if action == "certificate":
-                return self.prepare_certificate()
-            if action == "configure":
-                if state.get("session"):
-                    raise BankError("Scollega il conto prima di modificare l’applicazione.")
-                redirect = data.get("redirect")
-                if redirect not in (CALLBACK, CALLBACK_ALTERNATIVE):
-                    raise BankError("Usa uno degli URL di rientro locali indicati nel pannello.")
+        if action == "status":
+            return self.status(self.load())
+        if not self.lock.acquire(blocking=False):
+            raise BankBusy("È già in corso un’operazione bancaria. Riprova tra poco.")
+        try:
+            return self.run_action(action, data, time.monotonic() + NETWORK_BUDGET_SECONDS)
+        finally:
+            self.lock.release()
+
+    def run_action(self, action, data, deadline):
+        state = self.load()
+        if action == "certificate":
+            return self.prepare_certificate()
+        if action == "configure":
+            if state.get("session"):
+                raise BankError("Scollega il conto prima di modificare l’applicazione.")
+            redirect = data.get("redirect")
+            if redirect not in (CALLBACK, CALLBACK_ALTERNATIVE):
+                raise BankError("Usa uno degli URL di rientro locali indicati nel pannello.")
+            try:
+                application = uuid_value(data.get("application"))
+            except ValueError:
+                raise BankError("Inserisci l’ID applicazione indicato da Enable Banking.") from None
+            state = {"application": application, "redirect": redirect}
+            self.save(state)
+            return self.status(state)
+        if action == "start":
+            return self.start(state, deadline)
+        if action == "finish":
+            return self.finish(state, data, deadline)
+        if action == "select":
+            session = state.get("session", {})
+            choices = session.get("choices") or []
+            index = data.get("index")
+            if type(index) is not int or not 0 <= index < len(choices):
+                raise BankError("Seleziona un conto valido.")
+            session["account"] = choices[index]
+            session.pop("choices")
+            self.save(state)
+            return self.status(state)
+        if action == "disconnect":
+            session = state.get("session")
+            if session:
                 try:
-                    application = uuid_value(data.get("application"))
-                except ValueError:
-                    raise BankError("Inserisci l’ID applicazione indicato da Enable Banking.") from None
-                state = {"application": application, "redirect": redirect}
-                self.save(state)
-                return self.status(state)
-            if action == "start":
-                return self.start(state)
-            if action == "finish":
-                return self.finish(state, data)
-            if action == "select":
-                session = state.get("session", {})
-                choices = session.get("choices") or []
-                index = data.get("index")
-                if type(index) is not int or not 0 <= index < len(choices):
-                    raise BankError("Seleziona un conto valido.")
-                session["account"] = choices[index]
-                session.pop("choices")
-                self.save(state)
-                return self.status(state)
-            if action == "disconnect":
-                session = state.get("session")
-                if session:
-                    try:
-                        self.api(state, "DELETE", "/sessions/" + session["id"])
-                    except BankError as error:
-                        if not error.expired:
-                            raise
-                state.pop("session", None)
-                state.pop("pending", None)
-                self.save(state)
-                return self.status(state)
-            if action == "movements":
-                return self.movements(state, data)
-            raise BankError("Operazione Open Banking non valida.")
+                    self.api(state, "DELETE", "/sessions/" + session["id"], deadline=deadline)
+                except BankError as error:
+                    if not error.expired:
+                        raise
+            state.pop("session", None)
+            state.pop("pending", None)
+            self.save(state)
+            return self.status(state)
+        if action == "movements":
+            return self.movements(state, data, deadline)
+        raise BankError("Operazione Open Banking non valida.")

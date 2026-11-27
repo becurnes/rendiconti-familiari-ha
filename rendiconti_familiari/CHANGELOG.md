@@ -1,3 +1,9 @@
+# 1.4.0
+
+- L’accesso avviene dal pannello Home Assistant anche via VPN. Rimossi il listener 8100, la password dedicata e il mount dei certificati Home Assistant.
+- Server con limiti di connessione, concorrenza e dimensioni delle richieste. L’esecuzione del servizio avviene con un utente senza privilegi dopo l’assegnazione dei permessi dei file esistenti.
+- Le chiamate Enable Banking rispettano un limite temporale complessivo. Il registro rimane disponibile durante le richieste alla banca.
+
 # 1.3.1
 
 - Accetta entrambi i domini ufficiali di autorizzazione di Enable Banking per il collegamento BPER.
