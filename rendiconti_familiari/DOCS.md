@@ -35,9 +35,21 @@ Importo negativo significa uscita. Una colonna **Uscite** può invece contenere 
 
 ## Accesso locale e via VPN
 
-Dalla versione 1.4.0 apri **Rendiconti** dal pannello di Home Assistant. Fuori casa connettiti prima alla VPN e apri Home Assistant al suo indirizzo abituale. Usa un indirizzo HTTPS con certificato valido se configurato. Quando la VPN termina sul router, HTTPS protegge anche il tratto tra router e Raspberry.
+Puoi aprire **Rendiconti** dal pannello di Home Assistant. Fuori casa connettiti prima alla VPN e apri Home Assistant al suo indirizzo abituale. Usa un indirizzo HTTPS con certificato valido se configurato. Quando la VPN termina sul router, HTTPS protegge anche il tratto tra router e Raspberry.
 
-Prima dell’aggiornamento, verifica di poter aprire Home Assistant via VPN e crea un backup cifrato che includa l’app. Mantieni la modalità di protezione attiva. L’aggiornamento conserva database, configurazione bancaria e filtro utente. La vecchia porta diretta 8100 e la relativa password non sono più disponibili. Rimuovi dal router e da eventuali proxy le vecchie regole che pubblicavano l’add-on. Dopo l’aggiornamento verifica l’apertura dal pannello in LAN e via VPN.
+Prima dell’aggiornamento, verifica di poter aprire Home Assistant via VPN e crea un backup cifrato che includa l’app. Mantieni la modalità di protezione attiva. L’aggiornamento conserva database, configurazione bancaria e filtro utente. La versione 1.5.0 aggiunge un accesso diretto distinto, descritto sotto. Rimuovi dal router e da eventuali proxy le vecchie regole che pubblicavano l’add-on. Dopo l’aggiornamento verifica l’apertura dal pannello in LAN e via VPN.
+
+## Accesso diretto HTTPS in LAN
+
+L’accesso diretto è facoltativo. Usa un nome DNS dedicato che in LAN risolve all’IPv4 del Raspberry. Puoi usare un sottodominio di tua proprietà e ottenere il certificato tramite convalida DNS-01, che funziona senza inoltrare porte. Usa un certificato con catena riconosciuta dai dispositivi. Se usi una CA locale, distribuisci il suo certificato di fiducia su ciascun dispositivo prima di provare l’accesso.
+
+1. In **app_configs** trova la cartella dedicata a Rendiconti familiari. Puoi raggiungerla da una condivisione o da un editor già autorizzato. Copia **lan-fullchain.pem** e **lan-privkey.pem**. Usa una chiave dedicata a questo servizio e limita l’accesso al file. La cartella è inclusa nei backup dell’app. Usa backup cifrati.
+2. Sul Mac, in una cartella privata, crea **lan-users.htpasswd** con `umask 077` e `htpasswd -c -B -C 10 lan-users.htpasswd tommaso`. Inserisci al prompt una password casuale dedicata, ad esempio di 24 caratteri. Copia solo il file con l’hash nella cartella dell’app. Per aggiungere persone, ripeti senza `-c`, che riscriverebbe il file.
+3. Nella configurazione attiva `lan_https`. In `lan_hostname` inserisci il nome esatto del certificato. In `lan_ipv4` inserisci la tua rete effettiva, ad esempio `192.168.178.0/24`. Nella sezione **Rete** mappa la porta host **8443** e riavvia. Il listener accetta soltanto HTTPS. Un certificato mancante, scaduto o non corrispondente, una chiave incompatibile o una configurazione incompleta lasciano disponibile il pannello Home Assistant.
+4. Dalla LAN apri `https://nome-scelto:8443`. Verifica che Safari riconosca il certificato prima di inserire la password. Lascia chiusi l’inoltro della porta sul router e sul proxy, e limita l’accesso alla LAN prevista nel firewall. Sui dispositivi condivisi usa una finestra privata e chiudila a fine lavoro, perché il browser può conservare le credenziali HTTP Basic per la sessione.
+5. Al rinnovo sostituisci certificato e chiave, poi riavvia l’app. Verifica il nuovo certificato dal browser. Per disattivare l’accesso, spegni `lan_https`, svuota il mapping di rete e riavvia.
+
+Spese, versamenti, importazione CSV ed esportazione usano lo stesso registro del pannello. La connessione bancaria tramite Enable Banking resta disponibile dal pannello Home Assistant. [Convalida DNS-01](https://letsencrypt.org/docs/challenge-types/#dns-01-challenge)
 
 ## Stampa con ScontrinoStudio per Mac
 

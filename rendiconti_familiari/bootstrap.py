@@ -2,6 +2,7 @@
 import json
 import os
 import stat
+import subprocess
 import sys
 
 APP_UID = 10001
@@ -29,7 +30,7 @@ def open_regular(directory, name):
 def prepare_volume(path):
     directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        user = ""
+        settings = {}
         options = open_regular(directory, "options.json")
         if options is not None:
             with os.fdopen(options, "rb") as file:
@@ -51,14 +52,21 @@ def prepare_volume(path):
                     os.close(fd)
         os.fchmod(directory, 0o700)
         os.fchown(directory, APP_UID, APP_GID)
-        return user
+        return settings
     finally:
         os.close(directory)
 
 
 def main():
     os.umask(0o077)
-    allowed_user = prepare_volume("/data")
+    sys.path.insert(0, "/app")
+    from lan_https import prepare_gateway
+    settings = prepare_volume("/data")
+    runtime = ""
+    try:
+        runtime = prepare_gateway(settings, APP_UID, APP_GID)
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        print(f"Accesso HTTPS LAN disattivato: {error}", file=sys.stderr)
     # Supervisor options and environment are never exposed to the HTTP process.
     os.setgroups([])
     os.setgid(APP_GID)
@@ -68,7 +76,8 @@ def main():
     os.execve(sys.executable, [sys.executable, "-B", "-u", "/app/server.py"], {
         "PATH": "/usr/local/bin:/usr/bin:/bin",
         "LANG": "C.UTF-8",
-        "RENDICONTI_ALLOWED_USER": allowed_user,
+        "RENDICONTI_ALLOWED_USER": settings.get("utente_autorizzato") or "",
+        "RENDICONTI_HTTPS_RUNTIME": runtime,
     })
 
 

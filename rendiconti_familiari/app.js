@@ -170,6 +170,7 @@ async function refresh() {
     const fresh = await api("month?month=" + encodeURIComponent(month));
     if (version !== loadVersion) return false;
     data = fresh;
+    $("#open-banking").hidden = data.openBanking === false;
     draw();
     createActions.forEach(selector => { $(selector).disabled = false; });
     return true;
@@ -515,7 +516,7 @@ $("#person-reset").onclick = () => editPerson();
 $("#person-form").onsubmit = submitPerson;
 $("#bank-open").onclick = () => {
   bankDialog.showModal();
-  runOpenBank("status", {});
+  if (data.openBanking !== false) runOpenBank("status", {});
 };
 bankDialog.onclose = clearBank;
 $("#ob-edit").onclick = () => { $("#ob-setup").hidden = false; };
