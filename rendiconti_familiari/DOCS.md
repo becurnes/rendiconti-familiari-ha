@@ -11,6 +11,12 @@ Home Assistant conserva i dati dell'app in `/data`. Per ritrovarli dopo un ripri
 - Puoi navigare fra tutti i mesi o aprire **Archivio** per tornare a quelli con registrazioni. Puoi correggere data, mese, descrizione, quote e pagamenti con **Modifica**.
 - In **Stampa** scegli un rendiconto individuale o quello di tutte le persone e seleziona rotolo da **58** o **80 mm**. Usa il pannello di stampa del browser sul dispositivo che vede la stampante, ad esempio Safari sul Mac con il driver della termica già configurato. Dal driver scegli la larghezza e l'altezza adatte e usa la scala al 100%. I margini effettivi e il taglio del rotolo dipendono dalla stampante e dal driver.
 
+## Arretrati
+
+In ogni rendiconto vedi separatamente il residuo del mese e gli importi ancora da ricevere per i mesi precedenti. Gli arretrati mostrano il saldo aggiornato ai versamenti già registrati. Le spese e gli acconti rimangono nel loro mese di origine, anche se il pagamento avviene dopo. Un'eventuale eccedenza di un mese non compensa gli arretrati.
+
+Da **Arretrati dei mesi precedenti**, usa **Registra acconto** per registrare un versamento sul mese indicato oppure **Apri mese** per vedere tutte le sue spese. Puoi modificare l'importo prima di salvare. Gli arretrati sono disponibili anche nella stampa da browser e in ScontrinoStudio 6.5.
+
 ## Movimenti BPER
 
 In **Importa movimenti** puoi caricare un CSV oppure incollare una tabella copiata da Excel o Numbers. In Smart Web, se trovi uno scarico Excel, aprilo sul Mac e copia le intestazioni e le colonne dei movimenti. Il sito mostra le uscite e ti lascia scegliere quali registrare. Gli altri movimenti del file non vengono archiviati. L'app segnala i movimenti già registrati quando ritrova la stessa data, descrizione e cifra. Per importi e descrizioni identici nello stesso giorno, mantiene distinte le occorrenze presenti nel medesimo elenco.
@@ -39,7 +45,7 @@ La porta parte disattivata. Non inoltrarla sul router. HTTP è adatto solo alla 
 
 ## Stampa con ScontrinoStudio per Mac
 
-1. Aggiorna ScontrinoStudio alla versione **6.4** e aprilo sul Mac con la stampante HOIN configurata come al solito.
+1. Aggiorna ScontrinoStudio alla versione **6.5** e aprilo sul Mac con la stampante HOIN configurata come al solito.
 2. Sul sito scegli **Stampa**, seleziona la persona o tutte le persone, indica il rotolo e premi **Scarica per ScontrinoStudio**.
 3. Apri il file `.rendiconto` dal Finder o dal pulsante **Apri rendiconto…** in ScontrinoStudio. Verifica l'anteprima e premi **Stampa rendiconto**.
 

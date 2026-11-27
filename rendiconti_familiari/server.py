@@ -150,7 +150,22 @@ def month_data(db, month):
     months = [row["month"] for row in db.execute("""
         SELECT month FROM expenses UNION SELECT month FROM payments ORDER BY month DESC
     """)]
-    return {"people": people, "expenses": expenses, "payments": payments, "months": months}
+    arrears = rows(db, """
+        SELECT person_id, month, SUM(cents) AS cents
+        FROM (
+            SELECT person_id, month, SUM(cents) AS cents
+            FROM shares JOIN expenses ON expenses.id = expense_id
+            WHERE month < ? GROUP BY person_id, month
+            UNION ALL
+            SELECT person_id, month, -SUM(cents) AS cents
+            FROM payments WHERE month < ? GROUP BY person_id, month
+        )
+        GROUP BY person_id, month
+        HAVING SUM(cents) > 0
+        ORDER BY month, person_id
+    """, (month, month))
+    return {"people": people, "expenses": expenses, "payments": payments, "months": months,
+            "arrears": arrears}
 
 
 def normalized(value):

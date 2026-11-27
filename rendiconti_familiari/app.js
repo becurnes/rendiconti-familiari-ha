@@ -22,7 +22,7 @@ const bankDialog = $("#bank-dialog");
 const printDialog = $("#print-dialog");
 const createActions = ["#new-expense", "#new-payment", "#bank-open", "#people-open", "#print-open"];
 let month = today().slice(0, 7);
-let data = { people: [], expenses: [], payments: [], months: [] };
+let data = { people: [], expenses: [], payments: [], months: [], arrears: [] };
 let loadVersion = 0;
 let entry = null;
 let personID = null;
@@ -116,10 +116,13 @@ function draw() {
   const received = total(data.payments);
   const summaries = data.people.map(person => ({ ...person, ...summarize(person.id) }));
   const remaining = summaries.reduce((sum, person) => sum + Math.max(person.balance, 0), 0);
+  const arrears = total(data.arrears);
   const totals = element("dl");
   field(totals, "Spese anticipate", money(owed));
   field(totals, "Versamenti ricevuti", money(received));
-  field(totals, "Ancora da ricevere", money(remaining), "highlight");
+  field(totals, "Residuo del mese", money(remaining));
+  field(totals, "Arretrati", money(arrears));
+  field(totals, "Totale da ricevere", money(remaining + arrears), "highlight");
   $("#totals").replaceChildren(totals);
 
   const cards = summaries.map(person => {
@@ -133,10 +136,22 @@ function draw() {
     field(amounts, "Dovuto", money(person.owed));
     field(amounts, "Ricevuto", money(person.received));
     field(amounts, balanceLabel(person.balance), money(Math.abs(person.balance)));
+    const past = data.arrears.filter(item => item.person_id === person.id);
+    if (past.length) {
+      field(amounts, "Arretrati", money(total(past)));
+      field(amounts, "Totale da ricevere", money(Math.max(person.balance, 0) + total(past)));
+    }
     card.append(head, amounts, button("Registra versamento", () => openEntry("payment", { person_id: person.id })));
     return card;
   });
   $("#cards").replaceChildren(...cards);
+  $("#arrears").hidden = !data.arrears.length;
+  $("#arrears-list").replaceChildren(...data.arrears.map(item => {
+    const row = record(personName(item.person_id), monthLabel(item.month), money(item.cents),
+      () => openEntry("payment", item), "Registra acconto");
+    $(".record-action", row).append(button("Apri mese", () => setMonth(item.month)));
+    return row;
+  }));
   $("#expenses").replaceChildren(...(data.expenses.length ? data.expenses.map(expense =>
     record(expense.description, [
       dayLabel(expense.day),
@@ -189,14 +204,15 @@ function openEntry(kind, item = {}, fromBank = false) {
   entry = { kind, item, fromBank };
   const form = entryForm.elements;
   const expense = kind === "expense";
-  const target = fromBank ? item.day.slice(0, 7) : month;
+  const target = item.month || (fromBank ? item.day.slice(0, 7) : month);
   $("#entry-title").textContent = expense ? (item.id ? "Modifica spesa" : "Aggiungi spesa")
     : (item.id ? "Modifica versamento" : "Registra versamento");
   $("#entry-day-label span").textContent = expense ? "Data della spesa" : "Data del versamento";
   $("#entry-text-label span").textContent = expense ? "Descrizione" : "Nota (facoltativa)";
   form.month.value = target;
   form.day.value = item.day || (expense && month !== today().slice(0, 7) ? month + "-01" : today());
-  form.amount.value = item.cents ? (item.cents / 100).toFixed(2).replace(".", ",") : "";
+  form.amount.value = item.cents && item.cents <= 99999999
+    ? (item.cents / 100).toFixed(2).replace(".", ",") : "";
   form.description.value = expense ? item.description || "" : item.note || "";
   form.description.required = expense;
   $("#share-field").hidden = !expense;
@@ -230,26 +246,27 @@ async function submitEntry(event) {
   const submit = $('button[type="submit"]', entryForm);
   if (submit.disabled) return;
   submit.disabled = true;
+  const active = entry;
   try {
     const fields = entryForm.elements;
-    const target = { id: entry.item.id, month: fields.month.value,
+    const target = { id: active.item.id, month: fields.month.value,
       day: fields.day.value, cents: parseCents(fields.amount.value) };
-    if (entry.kind === "expense") {
+    if (active.kind === "expense") {
       target.description = fields.description.value;
-      target.source_key = entry.item.key;
+      target.source_key = active.item.key;
       target.people = Array.from(entryForm.querySelectorAll("input[name=share]:checked"), input => Number(input.value));
     } else {
       target.note = fields.description.value;
       target.person_id = Number(fields.person.value);
     }
-    await api(entry.kind, target);
-    if (entry.fromBank) {
-      entry.item.imported = true;
+    await api(active.kind, target);
+    if (active.fromBank) {
+      active.item.imported = true;
       drawBankRows();
     }
     editor.close();
-    month = target.month;
-    if (await refresh()) showMessage($("#notice"), entry.kind === "expense" ? "Spesa salvata." : "Versamento salvato.");
+    if (!active.item.month) month = target.month;
+    if (await refresh()) showMessage($("#notice"), active.kind === "expense" ? "Spesa salvata." : "Versamento salvato.");
   } catch (error) {
     showMessage($(".form-error", entryForm), error.message);
   } finally {
@@ -366,7 +383,9 @@ function receiptData() {
         .map(share => ({ label: dayLabel(expense.day) + " · " + expense.description, cents: share.cents })));
       const payments = data.payments.filter(payment => payment.person_id === item.id)
         .map(payment => ({ label: [dayLabel(payment.day), payment.note].filter(Boolean).join(" · "), cents: payment.cents }));
-      return { name: item.name, owed, received, balance, expenses, payments };
+      const arrears = data.arrears.filter(row => row.person_id === item.id)
+        .map(row => ({ label: monthLabel(row.month), cents: row.cents }));
+      return { name: item.name, owed, received, balance, expenses, payments, arrears };
     }),
   };
 }
@@ -386,6 +405,12 @@ function printReceipt(event) {
     field(amounts, balanceLabel(item.balance), money(Math.abs(item.balance)));
     personReceipt.append(element("h2", item.name), receiptLines("Spese (quote)", item.expenses),
       receiptLines("Versamenti", item.payments), amounts);
+    if (item.arrears.length) {
+      personReceipt.append(receiptLines("Arretrati per mese", item.arrears));
+      const all = element("dl");
+      field(all, "Totale da ricevere", money(Math.max(item.balance, 0) + total(item.arrears)));
+      personReceipt.append(all);
+    }
     receipt.append(personReceipt);
   }
   printDialog.close();
@@ -408,7 +433,7 @@ function downloadReceipt() {
 }
 
 function showAccess() {
-  data = { people: [], expenses: [], payments: [], months: [] };
+  data = { people: [], expenses: [], payments: [], months: [], arrears: [] };
   document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
   $("#receipt").replaceChildren();
   draw();
