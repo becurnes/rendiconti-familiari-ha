@@ -18,6 +18,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
 API = "https://api.enablebanking.com"
+AUTHORIZATION_HOSTS = {"auth.enablebanking.com", "tilisy.enablebanking.com"}
 CALLBACK = "https://localhost:28787/rendiconti-bper"
 CALLBACK_ALTERNATIVE = "https://127.0.0.1:28787/rendiconti-bper"
 MAX_CENTS = 99_999_999
@@ -198,8 +199,11 @@ class OpenBanking:
             "state": nonce, "redirect_url": state["redirect"], "psu_type": "personal", "language": "it",
         })
         url = response.get("url")
-        parts = urlsplit(url or "")
-        if parts.scheme != "https" or parts.netloc != "auth.enablebanking.com":
+        try:
+            parts = urlsplit(url if isinstance(url, str) else "")
+        except ValueError:
+            raise BankError("Indirizzo di autorizzazione di Enable Banking non riconosciuto.") from None
+        if parts.scheme != "https" or parts.netloc not in AUTHORIZATION_HOSTS:
             raise BankError("Indirizzo di autorizzazione di Enable Banking non riconosciuto.")
         state["pending"] = {"nonce": nonce, "expires": time.time() + 1200, "consent_until": expiry}
         self.save(state)
