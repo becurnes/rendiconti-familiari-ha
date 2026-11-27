@@ -92,7 +92,48 @@
     </form>
   </dialog>
   <dialog id="bank-dialog">
-    <div class="section-head"><h2>Importa movimenti BPER</h2><button class="plain close" type="button" aria-label="Chiudi">×</button></div>
+    <div class="section-head"><h2>Movimenti BPER</h2><button class="plain close" type="button" aria-label="Chiudi">×</button></div>
+    <section id="open-banking">
+      <div class="section-head">
+        <h3>Open Banking</h3>
+        <button id="ob-refresh" type="button" hidden>Aggiorna movimenti</button>
+      </div>
+      <p id="ob-status" class="hint" role="status"></p>
+      <p id="ob-error" class="form-error" role="alert" hidden></p>
+      <form id="ob-setup" hidden>
+        <p class="hint">Registra un’app Production per uso personale su <a href="https://enablebanking.com/sign-in/" target="_blank" rel="noopener noreferrer">Enable Banking</a>. Carica il certificato pubblico, indica l’URL di rientro e attiva l’app collegando il tuo conto.</p>
+        <button id="ob-certificate" type="button">Scarica certificato pubblico</button>
+        <label>URL di rientro
+          <select id="ob-redirect">
+            <option>https://localhost:28787/rendiconti-bper</option>
+            <option>https://127.0.0.1:28787/rendiconti-bper</option>
+          </select>
+        </label>
+        <label>ID applicazione di Enable Banking
+          <input id="ob-app-id" autocomplete="off" maxlength="36" spellcheck="false" required>
+        </label>
+        <button type="submit">Salva configurazione</button>
+      </form>
+      <div id="ob-session-actions" class="dialog-actions" hidden>
+        <button id="ob-start" type="button" hidden>Collega BPER</button>
+        <button id="ob-end" type="button" hidden>Scollega conto</button>
+        <button id="ob-edit" class="plain" type="button" hidden>Modifica configurazione</button>
+      </div>
+      <form id="ob-finish" hidden>
+        <a id="ob-bank-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Continua su Enable Banking e BPER</a>
+        <p class="hint">Dopo il consenso, si aprirà un indirizzo locale che può mostrare un errore di connessione. Copia tutto l’indirizzo dalla barra del browser e incollalo qui.</p>
+        <label>Indirizzo di rientro dopo il consenso
+          <input id="ob-return" type="text" autocomplete="off" maxlength="12000" spellcheck="false" required>
+        </label>
+        <button type="submit">Completa collegamento</button>
+      </form>
+      <form id="ob-select" hidden>
+        <label>Conto da usare <select id="ob-accounts"></select></label>
+        <button type="submit">Usa questo conto</button>
+      </form>
+    </section>
+    <details id="bank-file-section">
+      <summary>Importazione da file o tabella</summary>
     <form id="bank-form">
       <p class="hint">Carica un CSV oppure copia da Excel o Numbers le colonne con data, descrizione e importo, intestazioni comprese. Se usi la colonna Importo, le uscite devono avere il segno meno. Puoi anche usare una colonna Uscite.</p>
       <label>File CSV<input id="bank-file" type="file" accept=".csv,.tsv,.txt,text/csv"></label>
@@ -100,6 +141,7 @@
       <p class="form-error" role="alert" hidden></p>
       <footer class="dialog-actions"><button class="primary" type="submit">Mostra uscite</button></footer>
     </form>
+    </details>
     <p id="bank-count" class="hint" role="status"></p>
     <ul class="records" id="bank-list"></ul>
   </dialog>

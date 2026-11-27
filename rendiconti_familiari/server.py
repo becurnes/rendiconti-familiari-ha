@@ -20,11 +20,14 @@ from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs
 from wsgiref.simple_server import WSGIServer, make_server
 
+from openbanking import BankError, OpenBanking
+
 ROOT = Path(__file__).resolve().parent
 DEMO = os.environ.get("RENDICONTI_DEMO") == "1"
 DATA = Path(os.environ.get("RENDICONTI_DATA", "/data"))
 DATA.mkdir(parents=True, exist_ok=True)
 DB = DATA / "rendiconti.sqlite3"
+OPEN_BANKING = OpenBanking(DATA)
 MAX_CENTS = 99_999_999
 OPTIONS = DATA / "options.json"
 settings = json.loads(OPTIONS.read_text()) if OPTIONS.exists() else {}
@@ -266,6 +269,23 @@ def collect_movements(db, records, mapping):
     return {"movements": movements, "skipped": skipped}
 
 
+def mark_imported(db, movements):
+    if not movements:
+        return
+    days = [row["day"] for row in movements]
+    registered = rows(db, """
+        SELECT source_key, day, SUM(cents) AS cents
+        FROM expenses JOIN shares ON expenses.id = expense_id
+        WHERE day BETWEEN ? AND ? OR source_key IS NOT NULL
+        GROUP BY expenses.id
+    """, (min(days), max(days)))
+    exact = {row["source_key"] for row in registered}
+    possible = {(row["day"], row["cents"]) for row in registered}
+    for row in movements:
+        row["imported"] = row["key"] in exact
+        row["possible"] = not row["imported"] and (row["day"], row["cents"]) in possible
+
+
 def save_expense(db, data):
     month, day = valid_month(data.get("month")), valid_day(data.get("day"))
     description = clean_text(data.get("description"), 500, required=True)
@@ -336,7 +356,7 @@ def route(environ):
             db.execute("BEGIN")
             return result(month_data(db, valid_month(month)))
         if method == "POST" and path in {
-            "/api/expense", "/api/payment", "/api/person", "/api/remove", "/api/bank"
+            "/api/expense", "/api/payment", "/api/person", "/api/remove", "/api/bank", "/api/open-banking"
         }:
             if (environ.get("HTTP_X_RENDICONTI") != "1"
                     or environ.get("CONTENT_TYPE", "").partition(";")[0] != "application/json"):
@@ -347,6 +367,15 @@ def route(environ):
             data = json.loads(environ["wsgi.input"].read(size))
             if not isinstance(data, dict):
                 raise InputError("Richiesta non valida.")
+            if path == "/api/open-banking":
+                if environ.get("rendiconti.direct") and not DIRECT_TLS:
+                    return result({"error": "Apri Rendiconti da Home Assistant o usa l’accesso diretto HTTPS per Open Banking."},
+                                  "403 Forbidden")
+                action = data.get("action")
+                response = OPEN_BANKING.dispatch(action, data)
+                if action == "movements":
+                    mark_imported(db, response["movements"])
+                return result(response)
             if path == "/api/bank":
                 return result(bank_preview(db, clean_text(data.get("raw"), 1_000_000, required=True)))
             if path == "/api/expense":
@@ -384,7 +413,7 @@ def application(environ, start_response):
 def serve(environ, start_response, direct=False):
     try:
         status, mime, body = route(environ)
-    except (InputError, csv.Error) as error:
+    except (InputError, csv.Error, BankError) as error:
         status, mime, body = result({"error": str(error)}, "400 Bad Request")
     except (ValueError, UnicodeError):
         status, mime, body = result({"error": "Formato della richiesta non valido."}, "400 Bad Request")

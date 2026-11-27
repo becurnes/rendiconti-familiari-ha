@@ -27,6 +27,7 @@ let loadVersion = 0;
 let entry = null;
 let personID = null;
 let bankRows = [];
+let openBankVersion = 0;
 
 function element(tag, value, className) {
   const item = document.createElement(tag);
@@ -324,7 +325,7 @@ async function submitPerson(event) {
 function drawBankRows() {
   $("#bank-list").replaceChildren(...bankRows.map(item => {
     const row = record(item.description,
-      [dayLabel(item.day), item.imported ? "Già registrato" : ""].filter(Boolean).join(" · "),
+      [dayLabel(item.day), item.imported ? "Già registrato" : item.possible ? "Possibile doppione" : ""].filter(Boolean).join(" · "),
       money(item.cents), () => openEntry("expense", item, true), "Usa");
     if (item.imported) $("button", row).disabled = true;
     return row;
@@ -337,6 +338,7 @@ async function previewBank(event) {
   if (submit.disabled) return;
   submit.disabled = true;
   const error = $("#bank-form .form-error");
+  const version = openBankVersion;
   showMessage(error, "");
   try {
     const file = $("#bank-file").files[0];
@@ -348,11 +350,13 @@ async function previewBank(event) {
       if (raw.includes("\ufffd")) raw = new TextDecoder("windows-1252").decode(bytes);
     }
     const details = await api("bank", { raw });
+    if (version !== openBankVersion || !bankDialog.open) return;
     bankRows = details.movements;
     showMessage($("#bank-count"), details.movements.length + " uscite trovate." +
       (details.skipped ? " Righe non lette: " + details.skipped + "." : ""));
     drawBankRows();
   } catch (failure) {
+    if (version !== openBankVersion || !bankDialog.open) return;
     bankRows = [];
     showMessage($("#bank-count"), "");
     drawBankRows();
@@ -360,6 +364,83 @@ async function previewBank(event) {
   } finally {
     submit.disabled = false;
   }
+}
+
+function openBankRequest(action, values = {}) {
+  return api("open-banking", { action, ...values });
+}
+
+function updateOpenBank(state) {
+  $("#ob-setup").hidden = Boolean(state.application);
+  $("#ob-app-id").value = state.application;
+  $("#ob-redirect").value = state.redirect;
+  $("#ob-session-actions").hidden = !state.application;
+  $("#ob-start").hidden = !state.application || state.hasSession;
+  $("#ob-end").hidden = !state.hasSession;
+  $("#ob-edit").hidden = state.hasSession;
+  $("#ob-refresh").hidden = !state.connected;
+  $("#ob-finish").hidden = !state.pending;
+  $("#ob-bank-link").hidden = true;
+  $("#ob-return").value = "";
+  $("#ob-select").hidden = !state.choices.length;
+  $("#ob-accounts").replaceChildren(...state.choices.map(item => option(item.index, item.label)));
+  $("#ob-certificate").textContent = state.certificate ? "Scarica certificato pubblico" : "Genera e scarica certificato pubblico";
+  const expiry = new Date(state.expires);
+  const expires = Number.isNaN(expiry.getTime()) ? "" : " · Consenso fino al " + dateFormat.format(expiry);
+  const message = state.connected ? state.account + expires
+    : state.choices.length ? "Scegli il conto da consultare."
+      : state.hasSession ? "Nessun conto disponibile. Scollega la sessione e verifica il conto abilitato in Enable Banking."
+        : "Conto non collegato.";
+  showMessage($("#ob-status"), message);
+}
+
+async function runOpenBank(action, values, complete = updateOpenBank) {
+  const version = ++openBankVersion;
+  const section = $("#open-banking");
+  section.inert = true;
+  section.setAttribute("aria-busy", "true");
+  showMessage($("#ob-error"), "");
+  try {
+    const payload = await openBankRequest(action, values);
+    if (version === openBankVersion && bankDialog.open) complete(payload);
+  } catch (error) {
+    if (version === openBankVersion && bankDialog.open) {
+      showMessage($("#ob-error"), error.message);
+      if (action === "status") {
+        ["#ob-setup", "#ob-session-actions", "#ob-finish", "#ob-select", "#ob-refresh"]
+          .forEach(selector => { $(selector).hidden = true; });
+        showMessage($("#ob-status"), "");
+      }
+    }
+  } finally {
+    if (version === openBankVersion) {
+      section.inert = false;
+      section.removeAttribute("aria-busy");
+    }
+  }
+}
+
+function saveDownload(content, name) {
+  const blob = new Blob([content], { type: "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const link = element("a");
+  link.href = url;
+  link.download = name;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+function clearBank() {
+  ++openBankVersion;
+  bankRows = [];
+  drawBankRows();
+  $("#bank-form").reset();
+  $("#ob-return").value = "";
+  $("#ob-bank-link").removeAttribute("href");
+  $("#ob-bank-link").hidden = true;
+  showMessage($("#bank-count"), "");
 }
 
 function receiptLines(title, entries) {
@@ -419,21 +500,14 @@ function printReceipt(event) {
 
 function downloadReceipt() {
   const documentData = receiptData();
-  const blob = new Blob([JSON.stringify(documentData)], { type: "application/octet-stream" });
-  const url = URL.createObjectURL(blob);
-  const link = element("a");
-  link.href = url;
-  link.download = "Rendiconto-" + documentData.month + ".rendiconto";
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  saveDownload(JSON.stringify(documentData), "Rendiconto-" + documentData.month + ".rendiconto");
   printDialog.close();
   showMessage($("#notice"), "Apri il file .rendiconto scaricato in ScontrinoStudio sul Mac.");
 }
 
 function showAccess() {
   data = { people: [], expenses: [], payments: [], months: [], arrears: [] };
+  clearBank();
   document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
   $("#receipt").replaceChildren();
   draw();
@@ -485,7 +559,51 @@ entryForm.onsubmit = submitEntry;
 $("#people-open").onclick = () => { drawPeople(); editPerson(); peopleDialog.showModal(); };
 $("#person-reset").onclick = () => editPerson();
 $("#person-form").onsubmit = submitPerson;
-$("#bank-open").onclick = () => bankDialog.showModal();
+$("#bank-open").onclick = () => {
+  bankDialog.showModal();
+  runOpenBank("status", {});
+};
+bankDialog.onclose = clearBank;
+$("#ob-edit").onclick = () => { $("#ob-setup").hidden = false; };
+$("#ob-certificate").onclick = () => runOpenBank("certificate", {}, payload => {
+  saveDownload(payload.pem, "rendiconti-enablebanking.crt");
+  $("#ob-certificate").textContent = "Scarica certificato pubblico";
+});
+$("#ob-setup").onsubmit = event => {
+  event.preventDefault();
+  runOpenBank("configure", { application: $("#ob-app-id").value.trim(), redirect: $("#ob-redirect").value });
+};
+$("#ob-start").onclick = () => runOpenBank("start", {}, payload => {
+  $("#ob-finish").hidden = false;
+  const link = $("#ob-bank-link");
+  link.href = payload.url;
+  link.hidden = false;
+  $("#ob-return").value = "";
+});
+$("#ob-finish").onsubmit = event => {
+  event.preventDefault();
+  const callback = $("#ob-return").value;
+  $("#ob-return").value = "";
+  runOpenBank("finish", { callback });
+};
+$("#ob-select").onsubmit = event => {
+  event.preventDefault();
+  runOpenBank("select", { index: Number($("#ob-accounts").value) });
+};
+$("#ob-end").onclick = () => {
+  if (!window.confirm("Scollegare il conto BPER?")) return;
+  runOpenBank("disconnect", {}, state => {
+    bankRows = [];
+    drawBankRows();
+    showMessage($("#bank-count"), "");
+    updateOpenBank(state);
+  });
+};
+$("#ob-refresh").onclick = () => runOpenBank("movements", { month }, payload => {
+  bankRows = payload.movements;
+  showMessage($("#bank-count"), monthLabel(month) + " · " + bankRows.length + " uscite contabilizzate.");
+  drawBankRows();
+});
 $("#bank-form").onsubmit = previewBank;
 $("#print-open").onclick = () => {
   $("#print-form").elements.receipt_person.replaceChildren(option(0, "Tutte le persone"),

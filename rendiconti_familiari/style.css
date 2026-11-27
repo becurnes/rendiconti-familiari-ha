@@ -155,3 +155,10 @@ legend, .form-error { font-size: .87rem; }
 
 #arrears { margin-bottom: 14px; }
 #arrears .hint { margin-top: 4px; }
+
+#open-banking { display: grid; gap: 10px; margin: 10px 0 14px; }
+#open-banking form, #bank-file-section form { margin-top: 8px; }
+#bank-file-section { border-top: 1px solid var(--edge); padding-top: 10px; }
+#bank-file-section summary { cursor: pointer; font-weight: 650; }
+#ob-app-id, #ob-redirect { font-size: .9rem; }
+button.primary:disabled { cursor: wait; }

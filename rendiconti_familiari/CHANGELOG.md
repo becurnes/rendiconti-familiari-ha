@@ -1,3 +1,8 @@
+# 1.3.0
+
+- Collegamento BPER in sola lettura con Enable Banking per uso personale.
+- Anteprima manuale delle uscite del mese, con scelta delle spese da registrare.
+
 # 1.2.0
 
 - Mostra per persona gli arretrati ancora aperti, con importo e mese di origine.
