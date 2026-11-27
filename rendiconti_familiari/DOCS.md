@@ -26,3 +26,21 @@ Data;Descrizione;Importo
 Importo negativo significa uscita. Una colonna **Uscite** può invece contenere importi positivi. Se Smart Web offre soltanto un PDF, usa l'inserimento manuale o copia le righe in un foglio con le tre intestazioni indicate. BPER prevede l'accesso via Open Banking tramite terze parti autorizzate; in questa versione non c'è sincronizzazione automatica.
 
 [Documentazione Home Assistant sulle app locali](https://contributors.home-assistant.io/apps/first-app/) · [Informativa PSD2 di BPER](https://www.bper.it/footer/informative-normative/psd2-la-nuova-normativa-sui-servizi-di-pagamento)
+
+## Accesso diretto da browser
+
+La voce **Rendiconti** in Home Assistant continua a usare il login di Home Assistant. Per aprire lo stesso registro in una scheda indipendente:
+
+1. In **Impostazioni → App → Rendiconti familiari → Configurazione**, imposta `password_accesso_diretto` a una password dedicata di almeno 12 caratteri.
+2. Nella sezione **Rete** abilita la porta **8100/tcp** e imposta **8100** come porta host. Salva e riavvia l'app.
+3. Apri `http://homeassistant.local:8100` oppure `http://IP-DEL-RASPBERRY:8100`. Fuori casa usa la VPN e l'IP locale del Raspberry.
+
+La porta parte disattivata. Non inoltrarla sul router. HTTP è adatto solo alla rete domestica fidata o al tunnel VPN. Per usare HTTPS anche in LAN, imposta `https_accesso_diretto` e indica i file del certificato e della chiave presenti in `/ssl`, poi apri il nome host coperto dal certificato. Se il certificato non è valido, l'accesso diretto HTTPS non parte e il pannello Ingress resta disponibile.
+
+## Stampa con ScontrinoStudio per Mac
+
+1. Aggiorna ScontrinoStudio alla versione **6.4** e aprilo sul Mac con la stampante HOIN configurata come al solito.
+2. Sul sito scegli **Stampa**, seleziona la persona o tutte le persone, indica il rotolo e premi **Scarica per ScontrinoStudio**.
+3. Apri il file `.rendiconto` dal Finder o dal pulsante **Apri rendiconto…** in ScontrinoStudio. Verifica l'anteprima e premi **Stampa rendiconto**.
+
+Il file contiene le quote, i versamenti e i saldi che hai scelto di stampare. L'apertura non stampa automaticamente e non carica il file su Notion. Dal sito puoi ancora usare **Apri stampa** per stampare direttamente dal browser.

@@ -9,6 +9,14 @@
   <script defer src="./app.js"></script>
 </head>
 <body>
+  <main id="access" hidden>
+    <form id="access-form">
+      <h1>Rendiconti familiari</h1>
+      <label>Password di accesso<input name="password" type="password" autocomplete="current-password" maxlength="256" required></label>
+      <p class="form-error" role="alert" hidden></p>
+      <button class="primary" type="submit">Accedi</button>
+    </form>
+  </main>
   <main id="app">
     <header class="top">
       <div>
@@ -27,6 +35,7 @@
       <button id="new-payment" type="button">Registra versamento</button>
       <button id="bank-open" type="button">Importa movimenti</button>
       <button id="print-open" type="button">Stampa</button>
+      <button id="logout" class="plain" type="button" hidden>Esci</button>
     </div>
     <p id="notice" class="notice" role="status" hidden></p>
     <section class="totals" aria-label="Totali del mese" id="totals"></section>
@@ -95,7 +104,11 @@
       <label>Rendiconto<select name="receipt_person"></select></label>
       <label>Larghezza rotolo<select name="paper"><option value="58">58 mm</option><option value="80">80 mm</option></select></label>
       <p class="hint">Nel pannello di stampa seleziona la stampante termica e il formato del rotolo. Disattiva intestazioni e piè di pagina del browser.</p>
-      <footer class="dialog-actions"><button class="primary" type="submit">Apri stampa</button></footer>
+      <p class="hint">Per usare la stampante configurata in ScontrinoStudio, scarica il rendiconto e apri il file sul Mac.</p>
+      <footer class="dialog-actions">
+        <button id="scontrinostudio" type="button">Scarica per ScontrinoStudio</button>
+        <button class="primary" type="submit">Apri stampa</button>
+      </footer>
     </form>
   </dialog>
   <section id="receipt" aria-label="Rendiconto da stampare"></section>

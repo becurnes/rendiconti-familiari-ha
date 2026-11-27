@@ -57,7 +57,11 @@ async function api(endpoint, payload) {
     throw new Error("Il sito non risponde. Riaprilo da Home Assistant.");
   }
   const body = await response.json();
-  if (!response.ok) throw new Error(body.error || "Operazione non riuscita.");
+  if (!response.ok) {
+    const error = new Error(body.error || "Operazione non riuscita.");
+    error.status = response.status;
+    throw error;
+  }
   return body;
 }
 
@@ -156,7 +160,10 @@ async function refresh() {
     createActions.forEach(selector => { $(selector).disabled = false; });
     return true;
   } catch (error) {
-    if (version === loadVersion) showMessage($("#notice"), error.message);
+    if (version === loadVersion) {
+      if (error.status === 401) showAccess();
+      else showMessage($("#notice"), error.message);
+    }
     return false;
   }
 }
@@ -347,31 +354,99 @@ function receiptLines(title, entries) {
   return group;
 }
 
+function receiptData() {
+  const form = $("#print-form").elements;
+  const person = Number(form.receipt_person.value);
+  const people = person ? data.people.filter(item => item.id === person) : data.people;
+  return {
+    version: 1, month, period: monthLabel(month), paper: Number(form.paper.value),
+    people: people.map(item => {
+      const { owed, received, balance } = summarize(item.id);
+      const expenses = data.expenses.flatMap(expense => expense.shares.filter(share => share.person_id === item.id)
+        .map(share => ({ label: dayLabel(expense.day) + " · " + expense.description, cents: share.cents })));
+      const payments = data.payments.filter(payment => payment.person_id === item.id)
+        .map(payment => ({ label: [dayLabel(payment.day), payment.note].filter(Boolean).join(" · "), cents: payment.cents }));
+      return { name: item.name, owed, received, balance, expenses, payments };
+    }),
+  };
+}
+
 function printReceipt(event) {
   event.preventDefault();
-  const form = event.currentTarget.elements;
-  const person = Number(form.receipt_person.value);
+  const documentData = receiptData();
   const receipt = $("#receipt");
-  const people = person ? data.people.filter(item => item.id === person) : data.people;
-  receipt.className = form.paper.value === "80" ? "paper-80" : "paper-58";
-  receipt.replaceChildren(element("h1", "Rendiconto familiare"), element("p", monthLabel(month), "receipt-period"));
-  for (const item of people) {
+  receipt.className = documentData.paper === 80 ? "paper-80" : "paper-58";
+  receipt.replaceChildren(element("h1", "Rendiconto familiare"),
+    element("p", documentData.period, "receipt-period"));
+  for (const item of documentData.people) {
     const personReceipt = element("article");
-    const { owed, received, balance } = summarize(item.id);
-    const expenses = data.expenses.flatMap(expense => expense.shares.filter(share => share.person_id === item.id)
-      .map(share => ({ label: dayLabel(expense.day) + " · " + expense.description, cents: share.cents })));
-    const payments = data.payments.filter(payment => payment.person_id === item.id)
-      .map(payment => ({ label: [dayLabel(payment.day), payment.note].filter(Boolean).join(" · "), cents: payment.cents }));
     const amounts = element("dl");
-    field(amounts, "Dovuto", money(owed));
-    field(amounts, "Ricevuto", money(received));
-    field(amounts, balanceLabel(balance), money(Math.abs(balance)));
-    personReceipt.append(element("h2", item.name), receiptLines("Spese (quote)", expenses),
-      receiptLines("Versamenti", payments), amounts);
+    field(amounts, "Dovuto", money(item.owed));
+    field(amounts, "Ricevuto", money(item.received));
+    field(amounts, balanceLabel(item.balance), money(Math.abs(item.balance)));
+    personReceipt.append(element("h2", item.name), receiptLines("Spese (quote)", item.expenses),
+      receiptLines("Versamenti", item.payments), amounts);
     receipt.append(personReceipt);
   }
   printDialog.close();
   window.print();
+}
+
+function downloadReceipt() {
+  const documentData = receiptData();
+  const blob = new Blob([JSON.stringify(documentData)], { type: "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const link = element("a");
+  link.href = url;
+  link.download = "Rendiconto-" + documentData.month + ".rendiconto";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  printDialog.close();
+  showMessage($("#notice"), "Apri il file .rendiconto scaricato in ScontrinoStudio sul Mac.");
+}
+
+function showAccess() {
+  data = { people: [], expenses: [], payments: [], months: [] };
+  document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
+  $("#receipt").replaceChildren();
+  draw();
+  showMessage($("#notice"), "");
+  $("#app").hidden = true;
+  $("#access").hidden = false;
+  $("#access-form").elements.password.focus();
+}
+
+async function signIn(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submit = $('button[type="submit"]', form);
+  if (submit.disabled) return;
+  submit.disabled = true;
+  showMessage($(".form-error", form), "");
+  try {
+    await api("login", { password: form.elements.password.value });
+    form.reset();
+    $("#access").hidden = true;
+    $("#app").hidden = false;
+    $("#logout").hidden = false;
+    await refresh();
+  } catch (error) {
+    showMessage($(".form-error", form), error.message);
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+async function signOut() {
+  try {
+    await api("logout", {});
+    ++loadVersion;
+    showAccess();
+  } catch (error) {
+    showMessage($("#notice"), error.message);
+  }
 }
 
 $("#previous").onclick = () => moveMonth(-1);
@@ -393,9 +468,19 @@ $("#print-open").onclick = () => {
   printDialog.showModal();
 };
 $("#print-form").onsubmit = printReceipt;
+$("#scontrinostudio").onclick = downloadReceipt;
+$("#logout").onclick = signOut;
+$("#access-form").onsubmit = signIn;
 document.querySelectorAll("dialog .close").forEach(control => {
   control.onclick = () => control.closest("dialog").close();
 });
 monthInput.value = month;
 $("#period").textContent = monthLabel(month);
-refresh();
+api("session").then(session => {
+  $("#logout").hidden = !session.direct;
+  return refresh();
+}).catch(error => {
+  if (error.status === 401) showAccess();
+  else showMessage($("#notice"), error.message);
+});
+createActions.forEach(selector => { $(selector).disabled = true; });

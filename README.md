@@ -11,4 +11,4 @@ App locale per registrare spese anticipate per familiari, ripartire le quote e t
 
 Quando compare una nuova versione, usa **Aggiorna** dalla schermata dell'app. Il database dei rendiconti è salvato in `/data` sul dispositivo che esegue Home Assistant. Puoi includerlo nei backup di Home Assistant selezionando l'app.
 
-[Guida all'uso e alla configurazione](rendiconti_familiari/DOCS.md)
+[Guida all'uso, all'accesso diretto e alla stampa con ScontrinoStudio](rendiconti_familiari/DOCS.md)
