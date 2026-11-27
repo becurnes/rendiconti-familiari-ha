@@ -5,6 +5,8 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
+import sys
 import unicodedata
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -12,8 +14,9 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import parse_qs
 
-from waitress import serve as run_wsgi
+from waitress.server import create_server
 
+from lan_https import start_gateway
 from openbanking import BankBusy, BankError, OpenBanking
 
 ROOT = Path(__file__).resolve().parent
@@ -324,7 +327,7 @@ def save_person(db, data):
         raise InputError("La persona non esiste più.")
 
 
-def route(environ):
+def route(environ, direct=False):
     method, path = environ["REQUEST_METHOD"], environ["PATH_INFO"]
     static = {
         "/": ("index.html", "text/html; charset=utf-8"),
@@ -338,7 +341,9 @@ def route(environ):
         month = parse_qs(environ["QUERY_STRING"], max_num_fields=8).get("month", [None])[0]
         with database() as db:
             db.execute("BEGIN")
-            return result(month_data(db, valid_month(month)))
+            payload = month_data(db, valid_month(month))
+            payload["openBanking"] = not direct
+            return result(payload)
     if method != "POST" or path not in {
         "/api/expense", "/api/payment", "/api/person", "/api/remove", "/api/bank", "/api/open-banking"
     }:
@@ -353,6 +358,9 @@ def route(environ):
     if not isinstance(data, dict):
         raise InputError("Richiesta non valida.")
     if path == "/api/open-banking":
+        if direct:
+            return result({"error": "Apri il pannello Home Assistant per accedere a Open Banking."},
+                          "403 Forbidden")
         action = data.get("action")
         response = OPEN_BANKING.dispatch(action, data)
         if action == "movements":
@@ -391,9 +399,19 @@ def application(environ, start_response):
     return send(start_response, status, mime, body)
 
 
-def serve(environ, start_response):
+def lan_application(environ, start_response):
+    # This application is served exclusively over the gateway's private Unix socket.
+    if environ["REQUEST_METHOD"] == "POST":
+        expected = environ.get("HTTP_X_RENDICONTI_ORIGIN")
+        if not expected or environ.get("HTTP_ORIGIN") != expected:
+            return send(start_response, *result({"error": "Origine non autorizzata."}, "403 Forbidden"),
+                        direct=True)
+    return serve(environ, start_response, direct=True)
+
+
+def serve(environ, start_response, direct=False):
     try:
-        status, mime, body = route(environ)
+        status, mime, body = route(environ, direct)
     except BankBusy as error:
         status, mime, body = result({"error": str(error)}, "503 Service Unavailable")
     except (InputError, csv.Error, BankError) as error:
@@ -407,26 +425,54 @@ def serve(environ, start_response):
             "FOREIGN KEY constraint failed": "La persona selezionata non è disponibile.",
         }.get(str(error), "Impossibile salvare. Controlla i valori inseriti.")
         status, mime, body = result({"error": message}, "409 Conflict")
-    return send(start_response, status, mime, body)
+    return send(start_response, status, mime, body, direct=direct)
 
 
-def send(start_response, status, mime, body):
+def send(start_response, status, mime, body, direct=False):
+    frame_ancestors = "'none'" if direct else "'self'"
     start_response(status, [
         ("Content-Type", mime), ("Content-Length", str(len(body))), ("Cache-Control", "no-store"),
         ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "no-referrer"),
-        ("Content-Security-Policy", "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'"),
+        ("Content-Security-Policy", f"default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors {frame_ancestors}; form-action 'self'"),
     ])
     return [body]
 
 
 
-if __name__ == "__main__":
+def main():
     init_db()
     bind = "127.0.0.1" if DEMO else "0.0.0.0"
     port = int(os.environ.get("RENDICONTI_PORT", "8099")) if DEMO else 8099
-    run_wsgi(
-        application, listen=f"{bind}:{port}", threads=6, connection_limit=64,
-        channel_timeout=20, cleanup_interval=5, max_request_header_size=16_384,
-        max_request_body_size=MAX_REQUEST_BODY, expose_tracebacks=False,
-        clear_untrusted_proxy_headers=True,
-    )
+    socket_map = {}
+    limits = {
+        "channel_timeout": 20, "cleanup_interval": 5, "max_request_header_size": 16_384,
+        "max_request_body_size": MAX_REQUEST_BODY, "expose_tracebacks": False,
+        "clear_untrusted_proxy_headers": True,
+    }
+    ingress = create_server(application, map=socket_map, listen=f"{bind}:{port}",
+                            threads=6, connection_limit=64, **limits)
+    gateway = None
+    runtime = os.environ.get("RENDICONTI_HTTPS_RUNTIME")
+    if runtime and not DEMO:
+        try:
+            gateway = start_gateway(runtime)
+            create_server(
+                lan_application, map=socket_map, unix_socket=runtime + "/backend.sock",
+                unix_socket_perms="600", threads=4, connection_limit=64, **limits,
+            )
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+            if gateway is not None:
+                gateway.terminate()
+                gateway.wait(timeout=5)
+                gateway = None
+            print(f"Accesso HTTPS LAN disattivato: {error}", file=sys.stderr)
+    try:
+        ingress.run()
+    finally:
+        if gateway is not None and gateway.poll() is None:
+            gateway.terminate()
+            gateway.wait(timeout=5)
+
+
+if __name__ == "__main__":
+    main()

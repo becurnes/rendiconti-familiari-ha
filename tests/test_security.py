@@ -18,6 +18,7 @@ sandbox = tempfile.TemporaryDirectory()
 os.environ["RENDICONTI_DATA"] = sandbox.name
 
 import bootstrap
+import lan_https
 import openbanking
 import server
 
@@ -87,6 +88,49 @@ class IngressTest(unittest.TestCase):
                 process.terminate()
 
 
+class LanTest(unittest.TestCase):
+    def test_optional_explicit_private_network(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "runtime"
+            runtime.mkdir()
+            (runtime / "previous-key").write_text("fixture")
+            self.assertEqual(lan_https.prepare_gateway({}, 0, 0, Path(directory), runtime), "")
+            self.assertFalse(runtime.exists())
+            valid = {"lan_https": True, "lan_hostname": "rendiconti.example.test", "lan_ipv4": "192.168.1.0/24"}
+            self.assertEqual(lan_https.network_settings(valid)[0], "rendiconti.example.test")
+            for network in ("0.0.0.0/0", "10.0.0.0/8", "192.168.1.2/24", "192.0.2.0/24", "fd00::/64"):
+                with self.subTest(network=network), self.assertRaises(ValueError):
+                    lan_https.network_settings({**valid, "lan_ipv4": network})
+            with self.assertRaisesRegex(ValueError, "lan-fullchain.pem"):
+                lan_https.prepare_gateway(valid, 0, 0, Path(directory), runtime)
+
+    def test_lan_disables_banking_and_checks_post_origin(self):
+        server.init_db()
+        metadata = {
+            "HTTP_X_RENDICONTI_ORIGIN": "https://rendiconti.example.test:8443",
+            "QUERY_STRING": "month=2026-10", "CONTENT_TYPE": "application/json", "HTTP_X_RENDICONTI": "1",
+        }
+
+        def request(path, method, origin="", payload=b""):
+            headers = []
+            response = server.lan_application({
+                **metadata, "PATH_INFO": path, "REQUEST_METHOD": method,
+                "HTTP_ORIGIN": origin, "CONTENT_LENGTH": str(len(payload)), "wsgi.input": io.BytesIO(payload),
+            }, lambda status, fields: headers.append((status, dict(fields))))
+            return *headers[0], json.loads(b"".join(response))
+
+        status, headers, payload = request("/api/month", "GET")
+        self.assertEqual(status, "200 OK")
+        self.assertFalse(payload["openBanking"])
+        self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+        valid_origin = metadata["HTTP_X_RENDICONTI_ORIGIN"]
+        self.assertEqual(request("/api/open-banking", "POST", valid_origin,
+                                 b'{"action":"status"}')[0], "403 Forbidden")
+        csv_body = b'{"raw":"Data;Descrizione;Importo"}'
+        self.assertEqual(request("/api/bank", "POST", "https://other.example.test", csv_body)[0], "403 Forbidden")
+        self.assertEqual(request("/api/bank", "POST", valid_origin, csv_body)[0], "200 OK")
+
+
 class BankTest(unittest.TestCase):
     def test_busy_connection_keeps_status_available(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -138,7 +182,7 @@ class VolumeTest(unittest.TestCase):
             path = Path(directory)
             (path / "options.json").write_text('{"utente_autorizzato":"titolare"}')
             (path / "rendiconti.sqlite3").write_bytes(b"volume di prova")
-            self.assertEqual(bootstrap.prepare_volume(path), "titolare")
+            self.assertEqual(bootstrap.prepare_volume(path)["utente_autorizzato"], "titolare")
             self.assertEqual((path / "rendiconti.sqlite3").read_bytes(), b"volume di prova")
             self.assertEqual((path / "rendiconti.sqlite3").stat().st_mode & 0o777, 0o600)
             self.assertEqual(path.stat().st_mode & 0o777, 0o700)

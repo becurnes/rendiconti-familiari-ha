@@ -1,3 +1,8 @@
+# 1.5.0
+
+- Accesso facoltativo dalla LAN su HTTPS con certificato dedicato, filtro IPv4 e autenticazione separata.
+- Le richieste dirette usano lo stesso registro. Il collegamento e la consultazione tramite Enable Banking restano nel pannello Home Assistant.
+
 # 1.4.0
 
 - L’accesso avviene dal pannello Home Assistant anche via VPN. Rimossi il listener 8100, la password dedicata e il mount dei certificati Home Assistant.
