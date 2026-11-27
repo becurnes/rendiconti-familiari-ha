@@ -10,8 +10,16 @@ permissions:
 
 jobs:
   verify:
-    name: Verifica add-on
-    runs-on: ubuntu-24.04
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            name: Verifica add-on
+          - runner: ubuntu-24.04-arm
+            name: Verifica add-on Raspberry arm64
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

@@ -5,7 +5,6 @@ import re
 import shutil
 import stat
 import subprocess
-import tempfile
 from pathlib import Path
 
 NGINX = "/usr/sbin/nginx"
@@ -51,7 +50,13 @@ def read_asset(directory, name, limit):
     return data
 
 
-def prepare_gateway(options, uid, gid, config_path=Path("/config")):
+def prepare_gateway(options, uid, gid, config_path=Path("/config"),
+                    runtime=Path("/run/rendiconti-https")):
+    # The root-owned parent prevents replacement of the runtime path by the HTTP user.
+    try:
+        shutil.rmtree(runtime)
+    except FileNotFoundError:
+        pass
     if options.get("lan_https") is not True:
         return ""
     hostname, network = network_settings(options)
@@ -79,26 +84,26 @@ def prepare_gateway(options, uid, gid, config_path=Path("/config")):
         )
         if certificate.returncode or expected not in certificate.stdout:
             raise ValueError("Certificato TLS scaduto o non corrispondente al nome DNS.")
-    folder = Path(tempfile.mkdtemp(prefix="rendiconti-https-"))
+    runtime.mkdir(mode=0o700)
     try:
         settings = (Path(__file__).with_name("lan-nginx.conf").read_text()
                     .replace("@HOSTNAME@", hostname).replace("@NETWORK@", str(network))
-                    .replace("@PORT@", str(PORT)).replace("@RUNTIME@", str(folder)))
+                    .replace("@PORT@", str(PORT)).replace("@RUNTIME@", str(runtime)))
         assets = {
             "nginx.conf": settings.encode(), "fullchain.pem": cert,
             "privkey.pem": key, "users.htpasswd": b"\n".join(records) + b"\n",
         }
         for name, content in assets.items():
-            path = folder / name
+            path = runtime / name
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as stream:
                 stream.write(content)
                 os.fchown(stream.fileno(), uid, gid)
-        os.chown(folder, uid, gid)
+        os.chown(runtime, uid, gid)
     except BaseException:
-        shutil.rmtree(folder)
+        shutil.rmtree(runtime)
         raise
-    return str(folder)
+    return str(runtime)
 
 
 def start_gateway(runtime):

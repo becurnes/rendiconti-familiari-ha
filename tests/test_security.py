@@ -91,14 +91,18 @@ class IngressTest(unittest.TestCase):
 class LanTest(unittest.TestCase):
     def test_optional_explicit_private_network(self):
         with tempfile.TemporaryDirectory() as directory:
-            self.assertEqual(lan_https.prepare_gateway({}, 0, 0, Path(directory)), "")
+            runtime = Path(directory) / "runtime"
+            runtime.mkdir()
+            (runtime / "previous-key").write_text("fixture")
+            self.assertEqual(lan_https.prepare_gateway({}, 0, 0, Path(directory), runtime), "")
+            self.assertFalse(runtime.exists())
             valid = {"lan_https": True, "lan_hostname": "rendiconti.example.test", "lan_ipv4": "192.168.1.0/24"}
             self.assertEqual(lan_https.network_settings(valid)[0], "rendiconti.example.test")
             for network in ("0.0.0.0/0", "10.0.0.0/8", "192.168.1.2/24", "192.0.2.0/24", "fd00::/64"):
                 with self.subTest(network=network), self.assertRaises(ValueError):
                     lan_https.network_settings({**valid, "lan_ipv4": network})
             with self.assertRaisesRegex(ValueError, "lan-fullchain.pem"):
-                lan_https.prepare_gateway(valid, 0, 0, Path(directory))
+                lan_https.prepare_gateway(valid, 0, 0, Path(directory), runtime)
 
     def test_lan_disables_banking_and_checks_post_origin(self):
         server.init_db()
