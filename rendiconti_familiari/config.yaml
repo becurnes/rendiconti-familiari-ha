@@ -1,0 +1,20 @@
+name: Rendiconti familiari
+version: "1.0.0"
+slug: rendiconti_familiari
+description: Spese anticipate, acconti e saldi mensili
+arch:
+  - aarch64
+  - armv7
+  - amd64
+startup: application
+boot: auto
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:receipt-text-outline
+panel_title: Rendiconti
+apparmor: true
+panel_admin: true
+options:
+  utente_autorizzato: ""
+schema:
+  utente_autorizzato: str?

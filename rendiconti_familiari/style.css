@@ -1,0 +1,146 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, sans-serif;
+  --bg: #f5f5ee;
+  --sheet: #fffefa;
+  --ink: #202e27;
+  --muted: #59685f;
+  --edge: #dddfd3;
+  --accent: #235b44;
+  --accent-ink: #fff;
+  --strong-bg: #e0ece2;
+  --due: #77480d;
+  --danger: #a03332;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #181e1a;
+    --sheet: #222b25;
+    --ink: #ecf2ed;
+    --muted: #b4c1b7;
+    --edge: #405046;
+    --accent: #a4d8b8;
+    --accent-ink: #142b20;
+    --strong-bg: #2b4435;
+    --due: #f3c987;
+    --danger: #ffa6a6;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; color: var(--ink); background: var(--bg); }
+#app { max-width: 1150px; margin: auto; padding: clamp(16px, 4vw, 48px); }
+.top, .section-head, .month-controls, .actions, .dialog-actions, .records li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.top, .section-head, .records li { justify-content: space-between; }
+.top { align-items: end; flex-wrap: wrap; gap: 16px; margin-bottom: 22px; }
+.month-controls, .actions { flex-wrap: wrap; }
+.brand { margin: 0 0 4px; color: var(--muted); font-size: .9rem; font-weight: 650; }
+h1, h2, h3, dt, dd, p { margin: 0; }
+h1 {
+  font-family: Georgia, serif;
+  font-weight: 500;
+  font-size: clamp(2.2rem, 6vw, 4rem);
+  line-height: 1;
+}
+#period::first-letter { text-transform: uppercase; }
+h2 { font-size: 1.18rem; letter-spacing: -.02em; }
+h3 { font-size: 1.05rem; }
+button, input, select, textarea {
+  font: inherit;
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-height: 42px;
+}
+button { font-weight: 630; cursor: pointer; }
+button:disabled { opacity: .55; cursor: default; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.plain { background: transparent; border-color: transparent; color: var(--accent); }
+.close { font-size: 1.35rem; padding: 4px 12px; }
+.month-controls > button { min-width: 42px; font-size: 1.18rem; padding: 4px 10px; }
+.notice { margin-top: 14px; color: var(--accent); font-size: .92rem; }
+.totals { margin: 24px 0 28px; }
+dl { margin: 0; }
+.totals dl, .people-grid, .ledgers { display: grid; gap: 12px; }
+.totals dl { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.people-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 235px), 1fr)); margin: 10px 0 24px; }
+.ledgers { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.totals dl > div, .person-card, .ledger {
+  padding: clamp(14px, 2.5vw, 22px);
+  background: var(--sheet);
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+}
+.totals dl > .highlight { background: var(--strong-bg); }
+.totals dt, .hint { color: var(--muted); font-size: .86rem; }
+.totals dd { margin-top: 6px; font-size: clamp(1rem, 2.7vw, 1.8rem); font-weight: 650; }
+dd, .record-action strong { font-variant-numeric: tabular-nums; }
+.person-card dl { margin: 12px 0 8px; }
+.person-card dl > div { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; font-size: .94rem; }
+.person-card dl > div:last-child { border-top: 1px solid var(--edge); margin-top: 5px; padding-top: 8px; font-weight: 700; }
+.status { color: var(--accent); font-size: .8rem; }
+.due { color: var(--due); }
+.records { list-style: none; margin: 8px 0 0; padding: 0; }
+.records li { padding: 9px 0; min-height: 46px; }
+.records li + li { border-top: 1px solid var(--edge); }
+.record-detail { min-width: 0; display: grid; gap: 3px; overflow-wrap: anywhere; }
+.record-action { text-align: right; white-space: nowrap; }
+.record-action .plain { display: block; margin-left: auto; min-height: 34px; padding: 3px 0 3px 10px; font-size: .85rem; }
+.records .empty { color: var(--muted); font-size: .9rem; }
+dialog {
+  width: min(540px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  padding: clamp(14px, 3vw, 24px);
+  border: 1px solid var(--edge);
+  border-radius: 15px;
+  background: var(--sheet);
+  color: var(--ink);
+}
+dialog::backdrop { background: #15221995; }
+dialog form { display: grid; gap: 13px; }
+dialog label { display: grid; min-width: 0; gap: 5px; font-size: .9rem; }
+dialog input, dialog select, dialog textarea { width: 100%; min-width: 0; }
+dialog textarea { resize: vertical; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+fieldset { margin: 0; border: 1px solid var(--edge); border-radius: 8px; min-width: 0; }
+legend, .form-error { font-size: .87rem; }
+.choices { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.choice { display: flex; align-items: center; gap: 7px; min-height: 32px; }
+.choice input { width: auto; min-height: auto; accent-color: var(--accent); }
+.form-error, .danger { color: var(--danger); }
+.dialog-actions { justify-content: flex-end; }
+#bank-count { margin-top: 12px; }
+#receipt { display: none; }
+@media (max-width: 620px) {
+  .ledgers { grid-template-columns: 1fr; }
+  .totals { margin-top: 16px; }
+  .totals dl { gap: 6px; }
+  .totals dl > div { padding: 9px 7px; }
+  .totals dt { font-size: .73rem; }
+}
+@media print {
+  @page { margin: 0; }
+  :root { color-scheme: light; }
+  html, body { padding: 0; margin: 0; color: #000; background: #fff; }
+  #app, dialog { display: none !important; }
+  #receipt { display: block; padding: 3mm 2mm; font: 9pt/1.25 ui-monospace, monospace; color: #000; }
+  #receipt.paper-58 { width: 48mm; }
+  #receipt.paper-80 { width: 72mm; }
+  #receipt h1, #receipt h2, #receipt h3 { font: bold 10pt/1.2 ui-monospace, monospace; }
+  #receipt h1, .receipt-period { text-align: center; margin-bottom: 1mm; }
+  #receipt article { border-top: 1px dashed #000; margin-top: 2mm; padding-top: 2mm; }
+  #receipt section, #receipt article > dl { margin-top: 2mm; }
+  #receipt dl > div { display: flex; justify-content: space-between; gap: 2mm; break-inside: avoid; }
+  #receipt h2, #receipt h3 { break-after: avoid; }
+  #receipt dt { overflow-wrap: anywhere; }
+  #receipt dd { white-space: nowrap; }
+  #receipt article > dl { font-weight: bold; border-top: 1px dashed #000; padding-top: 1mm; }
+}

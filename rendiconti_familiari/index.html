@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Rendiconti familiari</title>
+  <link rel="stylesheet" href="./style.css">
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <main id="app">
+    <header class="top">
+      <div>
+        <p class="brand">Rendiconti familiari</p>
+        <h1 id="period"></h1>
+      </div>
+      <nav class="month-controls" aria-label="Mese del rendiconto">
+        <button id="previous" type="button" aria-label="Mese precedente">‹</button>
+        <input id="month" aria-label="Scegli il mese" type="month" required>
+        <button id="next" type="button" aria-label="Mese successivo">›</button>
+        <select id="history" aria-label="Mesi registrati"><option value="">Archivio</option></select>
+      </nav>
+    </header>
+    <div class="actions">
+      <button id="new-expense" class="primary" type="button">Aggiungi spesa</button>
+      <button id="new-payment" type="button">Registra versamento</button>
+      <button id="bank-open" type="button">Importa movimenti</button>
+      <button id="print-open" type="button">Stampa</button>
+    </div>
+    <p id="notice" class="notice" role="status" hidden></p>
+    <section class="totals" aria-label="Totali del mese" id="totals"></section>
+    <section>
+      <div class="section-head">
+        <h2>Riepilogo per persona</h2>
+        <button id="people-open" class="plain" type="button">Gestisci persone</button>
+      </div>
+      <div class="people-grid" id="cards"></div>
+    </section>
+    <div class="ledgers">
+      <section class="ledger">
+        <h2>Spese anticipate</h2>
+        <ul id="expenses" class="records"></ul>
+      </section>
+      <section class="ledger">
+        <h2>Versamenti ricevuti</h2>
+        <ul id="payments" class="records"></ul>
+      </section>
+    </div>
+  </main>
+  <dialog id="editor">
+    <form id="entry-form">
+      <div class="section-head">
+        <h2 id="entry-title"></h2><button class="plain close" type="button" aria-label="Chiudi">×</button>
+      </div>
+      <div class="form-grid">
+        <label>Mese del rendiconto<input name="month" type="month" required></label>
+        <label id="entry-day-label"><span>Data</span><input name="day" type="date" required></label>
+      </div>
+      <label id="entry-text-label"><span>Descrizione</span><input name="description" maxlength="500" autocomplete="off"></label>
+      <label>Importo (€)<input name="amount" type="text" inputmode="decimal" placeholder="0,00" maxlength="12" required></label>
+      <fieldset id="share-field">
+        <legend>Quota ripartita in parti uguali tra le persone selezionate</legend>
+        <div id="share-options" class="choices"></div>
+      </fieldset>
+      <label id="payment-person">Ricevuto da<select name="person"></select></label>
+      <p class="form-error" role="alert" hidden></p>
+      <footer class="dialog-actions"><button class="danger" id="entry-delete" type="button" hidden>Elimina</button><button class="primary" type="submit">Salva</button></footer>
+    </form>
+  </dialog>
+  <dialog id="people-dialog">
+    <div class="section-head"><h2>Persone</h2><button class="plain close" type="button" aria-label="Chiudi">×</button></div>
+    <ul class="records" id="people-list"></ul>
+    <form id="person-form">
+      <label>Nome<input name="person_name" maxlength="60" required></label>
+      <p class="form-error" role="alert" hidden></p>
+      <footer class="dialog-actions"><button class="plain" id="person-reset" type="button" hidden>Nuova persona</button><button id="person-save" class="primary" type="submit">Aggiungi</button></footer>
+    </form>
+  </dialog>
+  <dialog id="bank-dialog">
+    <div class="section-head"><h2>Importa movimenti BPER</h2><button class="plain close" type="button" aria-label="Chiudi">×</button></div>
+    <form id="bank-form">
+      <p class="hint">Carica un CSV oppure copia da Excel o Numbers le colonne con data, descrizione e importo, intestazioni comprese. Se usi la colonna Importo, le uscite devono avere il segno meno. Puoi anche usare una colonna Uscite.</p>
+      <label>File CSV<input id="bank-file" type="file" accept=".csv,.tsv,.txt,text/csv"></label>
+      <label>Oppure incolla la tabella<textarea id="bank-text" rows="3" placeholder="Data;Descrizione;Importo"></textarea></label>
+      <p class="form-error" role="alert" hidden></p>
+      <footer class="dialog-actions"><button class="primary" type="submit">Mostra uscite</button></footer>
+    </form>
+    <p id="bank-count" class="hint" role="status"></p>
+    <ul class="records" id="bank-list"></ul>
+  </dialog>
+  <dialog id="print-dialog">
+    <div class="section-head"><h2>Stampa su scontrino</h2><button class="plain close" type="button" aria-label="Chiudi">×</button></div>
+    <form id="print-form">
+      <label>Rendiconto<select name="receipt_person"></select></label>
+      <label>Larghezza rotolo<select name="paper"><option value="58">58 mm</option><option value="80">80 mm</option></select></label>
+      <p class="hint">Nel pannello di stampa seleziona la stampante termica e il formato del rotolo. Disattiva intestazioni e piè di pagina del browser.</p>
+      <footer class="dialog-actions"><button class="primary" type="submit">Apri stampa</button></footer>
+    </form>
+  </dialog>
+  <section id="receipt" aria-label="Rendiconto da stampare"></section>
+</body>
+</html>
