@@ -1,26 +1,20 @@
 import csv
 import hashlib
 import io
-import ipaddress
 import json
 import os
 import re
-import secrets
 import sqlite3
-import ssl
-import threading
-import time
 import unicodedata
 from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from http.cookies import CookieError, SimpleCookie
-from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs
-from wsgiref.simple_server import WSGIServer, make_server
 
-from openbanking import BankError, OpenBanking
+from waitress import serve as run_wsgi
+
+from openbanking import BankBusy, BankError, OpenBanking
 
 ROOT = Path(__file__).resolve().parent
 DEMO = os.environ.get("RENDICONTI_DEMO") == "1"
@@ -29,16 +23,8 @@ DATA.mkdir(parents=True, exist_ok=True)
 DB = DATA / "rendiconti.sqlite3"
 OPEN_BANKING = OpenBanking(DATA)
 MAX_CENTS = 99_999_999
-OPTIONS = DATA / "options.json"
-settings = json.loads(OPTIONS.read_text()) if OPTIONS.exists() else {}
-ALLOWED_USER = (settings.get("utente_autorizzato") or "").strip()
-DIRECT_TLS = settings.get("https_accesso_diretto", False)
-DIRECT_PASSWORD = settings.pop("password_accesso_diretto", "") or ""
-SESSION_COOKIE = "rendiconti_session"
-SESSION_SECONDS = 8 * 3600
-LOCAL_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
-    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7", "127.0.0.0/8"
-))
+ALLOWED_USER = os.environ.get("RENDICONTI_ALLOWED_USER", "").strip()
+MAX_REQUEST_BODY = 2_500_000
 
 
 @contextmanager
@@ -345,52 +331,49 @@ def route(environ):
         "/app.js": ("app.js", "text/javascript; charset=utf-8"),
         "/style.css": ("style.css", "text/css; charset=utf-8"),
     }
-    if method == "GET" and path == "/api/session":
-        return result({"direct": False})
     if method == "GET" and path in static:
         filename, mime = static[path]
         return "200 OK", mime, (ROOT / filename).read_bytes()
-    with database() as db:
-        if method == "GET" and path == "/api/month":
-            month = parse_qs(environ["QUERY_STRING"]).get("month", [None])[0]
+    if method == "GET" and path == "/api/month":
+        month = parse_qs(environ["QUERY_STRING"], max_num_fields=8).get("month", [None])[0]
+        with database() as db:
             db.execute("BEGIN")
             return result(month_data(db, valid_month(month)))
-        if method == "POST" and path in {
-            "/api/expense", "/api/payment", "/api/person", "/api/remove", "/api/bank", "/api/open-banking"
-        }:
-            if (environ.get("HTTP_X_RENDICONTI") != "1"
-                    or environ.get("CONTENT_TYPE", "").partition(";")[0] != "application/json"):
-                return result({"error": "Richiesta non autorizzata."}, "403 Forbidden")
-            size = int(environ.get("CONTENT_LENGTH") or 0)
-            if not 0 < size <= 2_500_000:
-                raise InputError("Richiesta vuota o file troppo grande.")
-            data = json.loads(environ["wsgi.input"].read(size))
-            if not isinstance(data, dict):
-                raise InputError("Richiesta non valida.")
-            if path == "/api/open-banking":
-                if environ.get("rendiconti.direct") and not DIRECT_TLS:
-                    return result({"error": "Apri Rendiconti da Home Assistant o usa l’accesso diretto HTTPS per Open Banking."},
-                                  "403 Forbidden")
-                action = data.get("action")
-                response = OPEN_BANKING.dispatch(action, data)
-                if action == "movements":
-                    mark_imported(db, response["movements"])
-                return result(response)
-            if path == "/api/bank":
-                return result(bank_preview(db, clean_text(data.get("raw"), 1_000_000, required=True)))
-            if path == "/api/expense":
-                save_expense(db, data)
-            elif path == "/api/payment":
-                save_payment(db, data)
-            elif path == "/api/person":
-                save_person(db, data)
-            else:
-                table = {"expense": "expenses", "payment": "payments"}.get(str(data.get("kind")))
-                if not table:
-                    raise InputError("Elemento non valido.")
-                db.execute(f"DELETE FROM {table} WHERE id = ?", (positive_int(data.get("id")),))
-            return result({"ok": True})
-    return result({"error": "Pagina non trovata."}, "404 Not Found")
+    if method != "POST" or path not in {
+        "/api/expense", "/api/payment", "/api/person", "/api/remove", "/api/bank", "/api/open-banking"
+    }:
+        return result({"error": "Pagina non trovata."}, "404 Not Found")
+    if (environ.get("HTTP_X_RENDICONTI") != "1"
+            or environ.get("CONTENT_TYPE", "").partition(";")[0] != "application/json"):
+        return result({"error": "Richiesta non autorizzata."}, "403 Forbidden")
+    size = int(environ.get("CONTENT_LENGTH") or 0)
+    if not 0 < size <= MAX_REQUEST_BODY:
+        raise InputError("Richiesta vuota o file troppo grande.")
+    data = json.loads(environ["wsgi.input"].read(size))
+    if not isinstance(data, dict):
+        raise InputError("Richiesta non valida.")
+    if path == "/api/open-banking":
+        action = data.get("action")
+        response = OPEN_BANKING.dispatch(action, data)
+        if action == "movements":
+            with database() as db:
+                mark_imported(db, response["movements"])
+        return result(response)
+    with database() as db:
+        if path == "/api/bank":
+            return result(bank_preview(db, clean_text(data.get("raw"), 1_000_000, required=True)))
+        if path == "/api/expense":
+            save_expense(db, data)
+        elif path == "/api/payment":
+            save_payment(db, data)
+        elif path == "/api/person":
+            save_person(db, data)
+        else:
+            table = {"expense": "expenses", "payment": "payments"}.get(str(data.get("kind")))
+            if not table:
+                raise InputError("Elemento non valido.")
+            db.execute(f"DELETE FROM {table} WHERE id = ?", (positive_int(data.get("id")),))
+        return result({"ok": True})
 
 
 def result(payload, status="200 OK"):
@@ -398,8 +381,6 @@ def result(payload, status="200 OK"):
 
 
 def application(environ, start_response):
-    if environ.get("rendiconti.direct"):
-        return direct_application(environ, start_response)
     allowed_ip = "127.0.0.1" if DEMO else "172.30.32.2"
     if environ.get("REMOTE_ADDR") != allowed_ip:
         status, mime, body = result({"error": "Accedi dal menu di Home Assistant."}, "403 Forbidden")
@@ -410,12 +391,14 @@ def application(environ, start_response):
     return send(start_response, status, mime, body)
 
 
-def serve(environ, start_response, direct=False):
+def serve(environ, start_response):
     try:
         status, mime, body = route(environ)
+    except BankBusy as error:
+        status, mime, body = result({"error": str(error)}, "503 Service Unavailable")
     except (InputError, csv.Error, BankError) as error:
         status, mime, body = result({"error": str(error)}, "400 Bad Request")
-    except (ValueError, UnicodeError):
+    except (ValueError, UnicodeError, RecursionError):
         status, mime, body = result({"error": "Formato della richiesta non valido."}, "400 Bad Request")
     except sqlite3.IntegrityError as error:
         message = {
@@ -424,156 +407,26 @@ def serve(environ, start_response, direct=False):
             "FOREIGN KEY constraint failed": "La persona selezionata non è disponibile.",
         }.get(str(error), "Impossibile salvare. Controlla i valori inseriti.")
         status, mime, body = result({"error": message}, "409 Conflict")
-    return send(start_response, status, mime, body, direct=direct)
+    return send(start_response, status, mime, body)
 
 
-def send(start_response, status, mime, body, direct=False, headers=()):
-    frame_policy = "none" if direct else "self"
+def send(start_response, status, mime, body):
     start_response(status, [
         ("Content-Type", mime), ("Content-Length", str(len(body))), ("Cache-Control", "no-store"),
         ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "no-referrer"),
-        ("Content-Security-Policy", f"default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors '{frame_policy}'; form-action 'self'"),
-        *headers,
+        ("Content-Security-Policy", "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'"),
     ])
     return [body]
 
-
-class DirectSessions:
-    def __init__(self, password):
-        self.salt = secrets.token_bytes(32)
-        self.password_hash = self.hash(password)
-        self.tokens = {}
-        self.attempts = {}
-        self.lock = threading.Lock()
-
-    def hash(self, password):
-        return hashlib.pbkdf2_hmac("sha256", password.encode(), self.salt, 310_000)
-
-    def login(self, ip, password):
-        now = time.monotonic()
-        with self.lock:
-            self.attempts = {key: value for key, value in self.attempts.items() if value[0] > now}
-            deadline, count = self.attempts.get(ip, (now + 300, 0))
-            if count >= 8 or (ip not in self.attempts and len(self.attempts) >= 128):
-                return None, "429 Too Many Requests"
-            self.attempts[ip] = (deadline, count + 1)
-        if not secrets.compare_digest(self.hash(password), self.password_hash):
-            return None, "401 Unauthorized"
-        token = secrets.token_urlsafe(32)
-        with self.lock:
-            self.tokens = {key: value for key, value in self.tokens.items() if value > now}
-            if len(self.tokens) >= 128:
-                del self.tokens[min(self.tokens, key=self.tokens.get)]
-            self.tokens[token] = now + SESSION_SECONDS
-            self.attempts.pop(ip, None)
-        return token, "200 OK"
-
-    def active(self, token):
-        with self.lock:
-            return self.tokens.get(token, 0) > time.monotonic()
-
-    def logout(self, token):
-        with self.lock:
-            self.tokens.pop(token, None)
-
-
-def session_cookie(token, seconds):
-    secure = "; Secure" if DIRECT_TLS else ""
-    return f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={seconds}{secure}"
-
-
-def direct_application(environ, start_response):
-    def reply(payload, status="200 OK", headers=()):
-        return send(start_response, *result(payload, status), direct=True, headers=headers)
-
-    address = environ["REMOTE_ADDR"]
-    try:
-        ip = ipaddress.ip_address(address)
-    except ValueError:
-        return reply({"error": "Indirizzo di rete non valido."}, "403 Forbidden")
-    if not any(ip in network for network in LOCAL_NETWORKS):
-        return reply({"error": "Accesso consentito dalla LAN o dalla VPN."}, "403 Forbidden")
-
-    path = environ["PATH_INFO"]
-    method = environ["REQUEST_METHOD"]
-    if method == "GET" and path in {"/", "/app.js", "/style.css"}:
-        return serve(environ, start_response, direct=True)
-
-    cookie = SimpleCookie()
-    try:
-        cookie.load(environ.get("HTTP_COOKIE", ""))
-    except CookieError:
-        cookie.clear()
-    token = cookie[SESSION_COOKIE].value if SESSION_COOKIE in cookie else ""
-    sessions = environ["rendiconti.direct"]
-
-    if method == "POST" and path in {"/api/login", "/api/logout"}:
-        if (environ.get("HTTP_X_RENDICONTI") != "1"
-                or environ.get("CONTENT_TYPE", "").partition(";")[0] != "application/json"):
-            return reply({"error": "Richiesta non autorizzata."}, "403 Forbidden")
-        if path == "/api/logout":
-            sessions.logout(token)
-            return reply({"ok": True}, headers=(("Set-Cookie", session_cookie("", 0)),))
-        try:
-            length = int(environ.get("CONTENT_LENGTH") or 0)
-            if not 0 < length <= 2048:
-                raise ValueError()
-            body = json.loads(environ["wsgi.input"].read(length))
-            password = body.get("password") if isinstance(body, dict) else None
-            if not isinstance(password, str) or not 0 < len(password) <= 256:
-                raise ValueError()
-        except (ValueError, UnicodeError):
-            return reply({"error": "Inserisci la password di accesso."}, "400 Bad Request")
-        token, status = sessions.login(address, password)
-        if not token:
-            message = ("Troppi tentativi. Riprova tra qualche minuto."
-                       if status.startswith("429") else "Password errata.")
-            return reply({"error": message}, status)
-        return reply({"ok": True}, headers=(("Set-Cookie", session_cookie(token, SESSION_SECONDS)),))
-
-    if not sessions.active(token):
-        return reply({"error": "Accedi ai rendiconti."}, "401 Unauthorized")
-    if method == "GET" and path == "/api/session":
-        return reply({"direct": True})
-    return serve(environ, start_response, direct=True)
-
-
-class ThreadedServer(ThreadingMixIn, WSGIServer):
-    daemon_threads = True
 
 
 if __name__ == "__main__":
     init_db()
     bind = "127.0.0.1" if DEMO else "0.0.0.0"
     port = int(os.environ.get("RENDICONTI_PORT", "8099")) if DEMO else 8099
-    if not DEMO and 12 <= len(DIRECT_PASSWORD) <= 256:
-        sessions = DirectSessions(DIRECT_PASSWORD)
-
-        def direct_listener(environ, start_response):
-            environ["rendiconti.direct"] = sessions
-            return application(environ, start_response)
-
-        try:
-            direct = make_server(bind, 8100, direct_listener, server_class=ThreadedServer)
-            if DIRECT_TLS:
-                with direct:
-                    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-                    context.minimum_version = ssl.TLSVersion.TLSv1_2
-                    cert = Path("/ssl") / Path(settings["certificato"]).name
-                    key = Path("/ssl") / Path(settings["chiave_certificato"]).name
-                    context.load_cert_chain(cert, key)
-                    direct.socket = context.wrap_socket(direct.socket, server_side=True, do_handshake_on_connect=False)
-                    threading.Thread(target=direct.serve_forever, daemon=True).start()
-                    with make_server(bind, port, application, server_class=ThreadedServer) as server:
-                        print("Rendiconti in ascolto: Ingress 8099 e accesso diretto HTTPS 8100.")
-                        server.serve_forever()
-            else:
-                threading.Thread(target=direct.serve_forever, daemon=True).start()
-                print("Accesso diretto HTTP in ascolto sulla porta 8100.")
-        except (OSError, KeyError, TypeError, ValueError) as error:
-            print(f"Accesso diretto non avviato: {error}")
-    elif DIRECT_PASSWORD:
-        print("Accesso diretto disabilitato: usa una password da 12 a 256 caratteri.")
-    with make_server(bind, port, application, server_class=ThreadedServer) as server:
-        print(f"Rendiconti in ascolto sulla porta {port}")
-        server.serve_forever()
+    run_wsgi(
+        application, listen=f"{bind}:{port}", threads=6, connection_limit=64,
+        channel_timeout=20, cleanup_interval=5, max_request_header_size=16_384,
+        max_request_body_size=MAX_REQUEST_BODY, expose_tracebacks=False,
+        clear_untrusted_proxy_headers=True,
+    )
