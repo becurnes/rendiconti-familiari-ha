@@ -1,3 +1,7 @@
+# 1.3.1
+
+- Accetta entrambi i domini ufficiali di autorizzazione di Enable Banking per il collegamento BPER.
+
 # 1.3.0
 
 - Collegamento BPER in sola lettura con Enable Banking per uso personale.
