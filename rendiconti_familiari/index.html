@@ -9,10 +9,10 @@
   <script defer src="./app.js"></script>
 </head>
 <body>
+  <div class="app-bar"><span>Rendiconti familiari</span></div>
   <main id="app">
     <header class="top">
       <div>
-        <p class="brand">Rendiconti familiari</p>
         <h1 id="period"></h1>
       </div>
       <nav class="month-controls" aria-label="Mese del rendiconto">
@@ -30,16 +30,24 @@
     </div>
     <p id="notice" class="notice" role="status" hidden></p>
     <section class="totals" aria-label="Totali del mese" id="totals"></section>
-    <section>
+    <section class="ledger balances">
       <div class="section-head">
-        <h2>Riepilogo per persona</h2>
+        <h2>Saldi per persona</h2>
         <button id="people-open" class="plain" type="button">Gestisci persone</button>
       </div>
-      <div class="people-grid" id="cards"></div>
+      <div class="table-scroll">
+        <table class="balances-table">
+          <thead><tr>
+            <th scope="col">Persona</th><th scope="col">Dovuto</th><th scope="col">Versato sul mese</th>
+            <th scope="col">Residuo del mese</th><th scope="col">Arretrati</th>
+            <th scope="col">Da ricevere</th><th scope="col"><span class="sr-only">Azioni</span></th>
+          </tr></thead>
+          <tbody id="balances"></tbody>
+        </table>
+      </div>
     </section>
     <section class="ledger" id="arrears" hidden>
       <h2>Arretrati dei mesi precedenti</h2>
-      <p class="hint">Ogni importo rimane collegato al mese in cui è dovuto.</p>
       <ul id="arrears-list" class="records"></ul>
     </section>
     <div class="ledgers">
@@ -50,6 +58,8 @@
       <section class="ledger">
         <h2>Versamenti ricevuti</h2>
         <ul id="payments" class="records"></ul>
+        <h3 id="later-payments-heading" hidden>Versati in altri mesi</h3>
+        <ul id="later-payments" class="records" hidden></ul>
       </section>
     </div>
   </main>
@@ -69,6 +79,10 @@
         <div id="share-options" class="choices"></div>
       </fieldset>
       <label id="payment-person">Ricevuto da<select name="person"></select></label>
+      <div id="payment-destination" hidden>
+        <label>A quale mese va imputato il versamento?<select name="arrears_target"></select></label>
+        <p id="allocation-note" class="hint" role="status"></p>
+      </div>
       <p class="form-error" role="alert" hidden></p>
       <footer class="dialog-actions"><button class="danger" id="entry-delete" type="button" hidden>Elimina</button><button class="primary" type="submit">Salva</button></footer>
     </form>
@@ -83,58 +97,37 @@
     </form>
   </dialog>
   <dialog id="bank-dialog">
-    <div class="section-head"><h2>Movimenti BPER</h2><button class="plain close" type="button" aria-label="Chiudi">×</button></div>
-    <section id="open-banking">
-      <div class="section-head">
-        <h3>Open Banking</h3>
-        <button id="ob-refresh" type="button" hidden>Aggiorna movimenti</button>
-      </div>
-      <p id="ob-status" class="hint" role="status"></p>
-      <p id="ob-error" class="form-error" role="alert" hidden></p>
-      <form id="ob-setup" hidden>
-        <p class="hint">Registra un’app Production per uso personale su <a href="https://enablebanking.com/sign-in/" target="_blank" rel="noopener noreferrer">Enable Banking</a>. Carica il certificato pubblico, indica l’URL di rientro e attiva l’app collegando il tuo conto.</p>
-        <button id="ob-certificate" type="button">Scarica certificato pubblico</button>
-        <label>URL di rientro
-          <select id="ob-redirect">
-            <option>https://localhost:28787/rendiconti-bper</option>
-            <option>https://127.0.0.1:28787/rendiconti-bper</option>
-          </select>
-        </label>
-        <label>ID applicazione di Enable Banking
-          <input id="ob-app-id" autocomplete="off" maxlength="36" spellcheck="false" required>
-        </label>
-        <button type="submit">Salva configurazione</button>
-      </form>
-      <div id="ob-session-actions" class="dialog-actions" hidden>
-        <button id="ob-start" type="button" hidden>Collega BPER</button>
-        <button id="ob-end" type="button" hidden>Scollega conto</button>
-        <button id="ob-edit" class="plain" type="button" hidden>Modifica configurazione</button>
-      </div>
-      <form id="ob-finish" hidden>
-        <a id="ob-bank-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Continua su Enable Banking e BPER</a>
-        <p class="hint">Dopo il consenso, si aprirà un indirizzo locale che può mostrare un errore di connessione. Copia tutto l’indirizzo dalla barra del browser e incollalo qui.</p>
-        <label>Indirizzo di rientro dopo il consenso
-          <input id="ob-return" type="text" autocomplete="off" maxlength="12000" spellcheck="false" required>
-        </label>
-        <button type="submit">Completa collegamento</button>
-      </form>
-      <form id="ob-select" hidden>
-        <label>Conto da usare <select id="ob-accounts"></select></label>
-        <button type="submit">Usa questo conto</button>
-      </form>
-    </section>
-    <details id="bank-file-section">
-      <summary>Importazione da file o tabella</summary>
+    <div class="section-head"><h2>Importa movimenti</h2><button class="plain close" type="button" aria-label="Chiudi">×</button></div>
     <form id="bank-form">
-      <p class="hint">Carica un CSV oppure copia da Excel o Numbers le colonne con data, descrizione e importo, intestazioni comprese. Se usi la colonna Importo, le uscite devono avere il segno meno. Puoi anche usare una colonna Uscite.</p>
-      <label>File CSV<input id="bank-file" type="file" accept=".csv,.tsv,.txt,text/csv"></label>
-      <label>Oppure incolla la tabella<textarea id="bank-text" rows="3" placeholder="Data;Descrizione;Importo"></textarea></label>
+      <label>File della banca<input id="bank-file" type="file" accept=".xls,.csv,.tsv,.txt"></label>
+      <details id="bank-file-section">
+        <summary>Incolla una tabella</summary>
+        <label>Tabella con intestazioni<textarea id="bank-text" rows="3" placeholder="Data;Descrizione;Importo"></textarea></label>
+      </details>
       <p class="form-error" role="alert" hidden></p>
-      <footer class="dialog-actions"><button class="primary" type="submit">Mostra uscite</button></footer>
+      <div class="dialog-actions"><button class="primary" type="submit">Leggi movimenti</button></div>
     </form>
-    </details>
-    <p id="bank-count" class="hint" role="status"></p>
-    <ul class="records" id="bank-list"></ul>
+    <section id="bank-selection" hidden>
+      <div class="bank-toolbar">
+        <label>Mese da importare<input id="bank-month" type="month" required></label>
+        <button id="bank-people" type="button">Gestisci persone</button>
+      </div>
+      <p id="bank-count" class="hint" role="status"></p>
+      <div class="table-scroll">
+        <table class="bank-table">
+          <thead><tr>
+            <th scope="col"><input id="bank-select-all" type="checkbox" aria-label="Seleziona tutte le uscite senza segnalazioni"></th>
+            <th scope="col">Data e descrizione</th><th scope="col">Importo</th><th scope="col">Addebita a</th>
+          </tr></thead>
+          <tbody id="bank-list"></tbody>
+        </table>
+      </div>
+      <p id="bank-import-error" class="form-error" role="alert" hidden></p>
+      <footer class="dialog-actions">
+        <span id="bank-summary" class="hint" role="status"></span>
+        <button id="bank-import" class="primary" type="button" disabled>Salva selezione</button>
+      </footer>
+    </section>
   </dialog>
   <dialog id="print-dialog">
     <div class="section-head"><h2>Stampa su scontrino</h2><button class="plain close" type="button" aria-label="Chiudi">×</button></div>
