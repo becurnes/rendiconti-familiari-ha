@@ -6,6 +6,6 @@ RUN apk add --no-cache openssl=3.5.9-r1 libcrypto3=3.5.9-r1 libssl3=3.5.9-r1 \
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.txt
-COPY bootstrap.py server.py openbanking.py lan_https.py lan-nginx.conf index.html app.js style.css ./
+COPY bootstrap.py server.py lan_https.py lan-nginx.conf index.html app.js style.css ./
 EXPOSE 8099 8443
 CMD ["python3", "-I", "-B", "-u", "/app/bootstrap.py"]
