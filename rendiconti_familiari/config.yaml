@@ -1,5 +1,5 @@
 name: Rendiconti familiari
-version: "1.5.0"
+version: "1.5.1"
 slug: rendiconti_familiari
 description: Spese anticipate, acconti e saldi mensili
 arch:
@@ -16,18 +16,26 @@ panel_title: Rendiconti
 apparmor: true
 panel_admin: true
 ports:
+  8100/tcp: null
   8443/tcp: null
 ports_description:
+  8100/tcp: Accesso HTTP facoltativo dalla LAN IPv4 (senza cifratura)
   8443/tcp: Accesso HTTPS facoltativo dalla LAN IPv4
 map:
   - type: app_config
     read_only: true
 options:
+  lan_http: false
+  lan_http_ip: ""
+  lan_http_password: ""
   lan_https: false
   lan_hostname: ""
   lan_ipv4: ""
   utente_autorizzato: ""
 schema:
+  lan_http: bool
+  lan_http_ip: str?
+  lan_http_password: str?
   lan_https: bool
   lan_hostname: str?
   lan_ipv4: str?
