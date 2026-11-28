@@ -1,3 +1,10 @@
+# 1.6.0
+
+- Importazione mensile da file Excel .xls BPER e CSV con selezione e assegnazione delle uscite.
+- Versamenti imputabili agli arretrati mantenendo la data dell’incasso.
+- Riepilogo per persona in tabella e stampa individuale o complessiva.
+- Rimozione del collegamento bancario e dei relativi file locali.
+
 # 1.5.1
 
 - Accesso HTTP locale facoltativo tramite indirizzo IPv4, sottorete autorizzata e password dedicata.
