@@ -1,3 +1,5 @@
+import base64
+import binascii
 import csv
 import hashlib
 import hmac
@@ -9,6 +11,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import threading
 import unicodedata
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -19,18 +22,19 @@ from urllib.parse import parse_qs
 from waitress.server import create_server
 
 from lan_https import start_gateway
-from openbanking import BankBusy, BankError, OpenBanking
 
 ROOT = Path(__file__).resolve().parent
 DEMO = os.environ.get("RENDICONTI_DEMO") == "1"
 DATA = Path(os.environ.get("RENDICONTI_DATA", "/data"))
 DATA.mkdir(parents=True, exist_ok=True)
 DB = DATA / "rendiconti.sqlite3"
-OPEN_BANKING = OpenBanking(DATA)
 MAX_CENTS = 99_999_999
 ALLOWED_USER = os.environ.get("RENDICONTI_ALLOWED_USER", "").strip()
+MAX_BANK_FILE = 1_000_000
+MAX_BANK_ROWS = 2000
 MAX_REQUEST_BODY = 2_500_000
 LAN_HTTP_PORT = 8100
+XLS_READER_SLOT = threading.BoundedSemaphore(1)
 
 
 @contextmanager
@@ -76,6 +80,29 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS expenses_month ON expenses(month);
         CREATE INDEX IF NOT EXISTS payments_month ON payments(month);
+        """)
+        db.execute("BEGIN IMMEDIATE")
+        if not any(column["name"] == "arrears_target" for column in db.execute("PRAGMA table_info(payments)")):
+            db.execute("ALTER TABLE payments ADD COLUMN arrears_target TEXT")
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS payment_allocations (
+                payment_id INTEGER NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
+                month TEXT NOT NULL,
+                cents INTEGER NOT NULL CHECK(cents > 0),
+                PRIMARY KEY(payment_id, month)
+            )
+        """)
+        db.execute("CREATE INDEX IF NOT EXISTS payment_allocations_month ON payment_allocations(month)")
+        db.execute("""
+            CREATE VIEW IF NOT EXISTS payment_credits AS
+            SELECT id AS payment_id, month, day, person_id, note, month AS recorded_month,
+                cents - COALESCE(
+                    (SELECT SUM(a.cents) FROM payment_allocations a WHERE a.payment_id = payments.id), 0
+                ) AS cents
+            FROM payments
+            UNION ALL
+            SELECT p.id, a.month, p.day, p.person_id, p.note, p.month, a.cents
+            FROM payment_allocations a JOIN payments p ON p.id = a.payment_id
         """)
         db.executemany("INSERT OR IGNORE INTO people(id, name) VALUES (?, ?)",
                        [(1, "Mamma"), (2, "Papà")])
@@ -139,13 +166,30 @@ def month_data(db, month):
         expense["shares"].append(share)
         expense["cents"] += share["cents"]
     payments = rows(db, """
-        SELECT id, day, person_id, cents, note FROM payments
+        SELECT id, day, person_id, cents, note, arrears_target FROM payments
         WHERE month = ? ORDER BY day, id
+    """, (month,))
+    by_payment = {payment["id"]: payment for payment in payments}
+    for payment in payments:
+        payment["allocations"] = []
+    for allocation in rows(db, """
+        SELECT payment_id, a.month, a.cents FROM payment_allocations a
+        JOIN payments p ON p.id = a.payment_id WHERE p.month = ? ORDER BY a.month
+    """, (month,)):
+        by_payment[allocation.pop("payment_id")]["allocations"].append(allocation)
+    credits = rows(db, """
+        SELECT payment_id, day, person_id, cents, note, recorded_month FROM payment_credits
+        WHERE month = ? AND cents > 0 ORDER BY day, payment_id
     """, (month,))
     months = [row["month"] for row in db.execute("""
         SELECT month FROM expenses UNION SELECT month FROM payments ORDER BY month DESC
     """)]
-    arrears = rows(db, """
+    return {"people": people, "expenses": expenses, "payments": payments, "credits": credits,
+            "months": months, "arrears": prior_balances(db, month)}
+
+
+def prior_balances(db, month, exclude_payment=None):
+    balances = rows(db, """
         SELECT person_id, month, SUM(cents) AS cents
         FROM (
             SELECT person_id, month, SUM(cents) AS cents
@@ -153,14 +197,14 @@ def month_data(db, month):
             WHERE month < ? GROUP BY person_id, month
             UNION ALL
             SELECT person_id, month, -SUM(cents) AS cents
-            FROM payments WHERE month < ? GROUP BY person_id, month
+            FROM payment_credits WHERE month < ? AND payment_id IS NOT ?
+            GROUP BY person_id, month
         )
         GROUP BY person_id, month
         HAVING SUM(cents) > 0
         ORDER BY month, person_id
-    """, (month, month))
-    return {"people": people, "expenses": expenses, "payments": payments, "months": months,
-            "arrears": arrears}
+    """, (month, month, exclude_payment))
+    return balances
 
 
 def normalized(value):
@@ -175,6 +219,8 @@ BANK_HEADERS = {
     "amount": {"importo", "importoeur", "importoeneuro", "ammontare", "amount", "importoeuro"},
     "debit": {"uscite", "uscita", "addebiti", "addebito", "dare", "debito", "importoaddebito",
               "usciteeur", "importouscita", "importouscite"},
+    "category": {"categoria", "category"},
+    "status": {"stato", "status"},
     "sign": {"segno", "segnomovimento", "segnoimporto", "dareaavere", "dareavere", "dsa"},
 }
 
@@ -197,8 +243,18 @@ def bank_amount(value):
     return int(Decimal(value) * 100)
 
 
+ITALIAN_MONTHS = (
+    "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
+    "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre",
+)
+
+
 def bank_date(value):
     value = value.strip()
+    italian = re.fullmatch(r"(\d{1,2})\s+([a-z]+)\s+(\d{4})", value.lower())
+    if italian:
+        day, month, year = italian.groups()
+        return date(int(year), ITALIAN_MONTHS.index(month) + 1, int(day)).isoformat()
     for pattern in ("%Y-%m-%d", "%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d.%m.%Y"):
         try:
             return datetime.strptime(value, pattern).date().isoformat()
@@ -207,35 +263,78 @@ def bank_date(value):
     raise ValueError("Data non riconosciuta")
 
 
+def movement_columns(record):
+    headers = [normalized(cell) for cell in record]
+    mapping = {
+        field: next((i for i, cell in enumerate(headers) if cell in names), None)
+        for field, names in BANK_HEADERS.items()
+    }
+    if (mapping["day"] is not None and mapping["description"] is not None
+            and (mapping["amount"] is not None or mapping["debit"] is not None)):
+        return mapping
+    return None
+
+
+def xls_preview(db, encoded):
+    try:
+        raw = base64.b64decode(clean_text(encoded, 1_333_336, required=True), validate=True)
+    except (binascii.Error, ValueError):
+        raise InputError("Il file Excel non è leggibile.") from None
+    if len(raw) > MAX_BANK_FILE:
+        raise InputError("Il file supera 1 MB.")
+    if not raw.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+        raise InputError("Seleziona un file Excel .xls esportato dalla banca.")
+    if not XLS_READER_SLOT.acquire(blocking=False):
+        raise InputError("È già in corso la lettura di un file Excel. Riprova tra poco.")
+    try:
+        process = subprocess.run(
+            [sys.executable, "-I", "-B", str(ROOT / "xls_reader.py")],
+            input=raw, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True,
+            timeout=4, cwd=ROOT, env={"LANG": "C.UTF-8"},
+        )
+    except subprocess.TimeoutExpired:
+        raise InputError("Lettura Excel interrotta. Esporta un periodo più breve.") from None
+    except (subprocess.CalledProcessError, OSError):
+        raise InputError("Il file Excel è danneggiato, troppo complesso o non supportato.") from None
+    finally:
+        XLS_READER_SLOT.release()
+    workbook = json.loads(process.stdout)
+    if workbook.get("too_large"):
+        raise InputError("Il foglio Excel è troppo grande. Esporta un periodo più breve.")
+    for sheet in workbook["sheets"]:
+        records = iter(sheet)
+        for _, record in zip(range(35), records):
+            mapping = movement_columns(record)
+            if mapping:
+                return collect_movements(db, records, mapping)
+    raise InputError("Nel file Excel mancano le colonne di data, descrizione e importo.")
+
+
 def bank_preview(db, raw):
     for delimiter in ("\t", ";", ","):
         records = csv.reader(io.StringIO(raw.lstrip("\ufeff")), delimiter=delimiter)
         for _, record in zip(range(35), records):
-            headers = [normalized(cell) for cell in record]
-            mapping = {
-                field: next((i for i, cell in enumerate(headers) if cell in names), None)
-                for field, names in BANK_HEADERS.items()
-            }
-            if (mapping["day"] is not None and mapping["description"] is not None
-                    and (mapping["amount"] is not None or mapping["debit"] is not None)):
+            mapping = movement_columns(record)
+            if mapping:
                 return collect_movements(db, records, mapping)
     raise InputError("Intestazioni non riconosciute. Usa Data, Descrizione, Importo (uscite con segno meno), oppure Data, Descrizione, Uscite.")
 
 
 def collect_movements(db, records, mapping):
-    already_imported = {row[0] for row in db.execute(
-        "SELECT source_key FROM expenses WHERE source_key IS NOT NULL"
-    )}
     movements, repeats = [], {}
-    skipped = 0
+    skipped = pending = 0
     for record in records:
         if not any(cell.strip() for cell in record):
             continue
+
         def field(name):
             index = mapping[name]
             return record[index].strip() if index is not None and index < len(record) else ""
-        raw_amount = field("debit" if mapping["debit"] is not None else "amount")
-        if not raw_amount and mapping["debit"] is not None:
+
+        if not field("day") and normalized(field("description")) in {"totale", "totalemovimenti"}:
+            continue
+        raw_amount = field("debit" if mapping["debit"] is not None else "amount").strip('"').strip()
+        if raw_amount in {"", "-", "–", "—"}:
             continue
         try:
             signed = bank_amount(raw_amount)
@@ -243,6 +342,9 @@ def collect_movements(db, records, mapping):
             if mapping["debit"] is not None or sign in {"d", "dare", "debito", "uscita", "addebito"} or field("sign") == "-":
                 signed = -abs(signed)
             if signed >= 0 or sign in {"a", "avere", "credito", "entrata", "accredito"}:
+                continue
+            if normalized(field("status")) in {"dacontabilizzare", "noncontabilizzato", "inattesa"}:
+                pending += 1
                 continue
             day = bank_date(field("day"))
             description = field("description")
@@ -255,10 +357,11 @@ def collect_movements(db, records, mapping):
         repeats[identity] = repeats.get(identity, 0) + 1
         key = hashlib.sha256(f"{identity}:{repeats[identity]}".encode()).hexdigest()
         movements.append({"day": day, "description": description, "cents": -signed,
-                          "key": key, "imported": key in already_imported})
-        if len(movements) > 2000:
+                          "category": field("category")[:80], "key": key})
+        if len(movements) > MAX_BANK_ROWS:
             raise InputError("Il file contiene più di 2.000 uscite. Dividilo in più periodi.")
-    return {"movements": movements, "skipped": skipped}
+    mark_imported(db, movements)
+    return {"movements": movements, "skipped": skipped, "pending": pending}
 
 
 def mark_imported(db, movements):
@@ -309,16 +412,76 @@ def save_expense(db, data):
     ])
 
 
+def import_movements(db, data):
+    month = valid_month(data.get("month"))
+    movements = data.get("movements")
+    if not isinstance(movements, list) or not 1 <= len(movements) <= MAX_BANK_ROWS:
+        raise InputError("Seleziona almeno una spesa da importare.")
+    for movement in movements:
+        if not isinstance(movement, dict) or not movement.get("key"):
+            raise InputError("Movimento non valido.")
+        day = valid_day(movement.get("day"))
+        if day[:7] != month:
+            raise InputError("Le spese devono appartenere al mese selezionato.")
+        save_expense(db, {
+            "month": month, "day": day, "description": movement.get("description"),
+            "cents": movement.get("cents"), "people": movement.get("people"),
+            "source_key": movement["key"],
+        })
+    return {"count": len(movements)}
+
+
+def allocations_for(db, payment_id, month, person_id, amount, target):
+    if not target:
+        return []
+    if target != "all" and valid_month(target) >= month:
+        raise InputError("Scegli un mese precedente a quello del versamento.")
+    allocations = []
+    for row in prior_balances(db, month, exclude_payment=payment_id):
+        if row["person_id"] != person_id or (target != "all" and row["month"] != target):
+            continue
+        cents = min(amount, row["cents"])
+        allocations.append((row["month"], cents))
+        amount -= cents
+        if not amount:
+            break
+    if not allocations:
+        raise InputError("Non ci sono più arretrati da saldare per la destinazione scelta.")
+    return allocations
+
+
 def save_payment(db, data):
-    values = (valid_month(data.get("month")), valid_day(data.get("day")),
-              positive_int(data.get("person_id")), positive_int(data.get("cents"), MAX_CENTS),
-              clean_text(data.get("note", ""), 500))
+    month, day = valid_month(data.get("month")), valid_day(data.get("day"))
+    person_id, cents = positive_int(data.get("person_id")), positive_int(data.get("cents"), MAX_CENTS)
+    note = clean_text(data.get("note", ""), 500)
+    target = data.get("arrears_target") or None
     payment_id = data.get("id")
-    if payment_id is None:
-        db.execute("INSERT INTO payments(month, day, person_id, cents, note) VALUES (?, ?, ?, ?, ?)", values)
-    elif db.execute("UPDATE payments SET month=?, day=?, person_id=?, cents=?, note=? WHERE id=?",
-                    (*values, positive_int(payment_id))).rowcount == 0:
-        raise InputError("Il versamento non esiste più.")
+    previous = None
+    if payment_id is not None:
+        previous = db.execute("SELECT * FROM payments WHERE id = ?", (positive_int(payment_id),)).fetchone()
+        if previous is None:
+            raise InputError("Il versamento non esiste più.")
+        if "arrears_target" not in data:
+            target = previous["arrears_target"]
+    values = (month, day, person_id, cents, note, target)
+    # Editing the date or note must not reassign an already recorded settlement.
+    keep_allocations = previous is not None and all(previous[key] == value for key, value in (
+        ("month", month), ("person_id", person_id), ("cents", cents), ("arrears_target", target),
+    ))
+    allocations = [] if keep_allocations else allocations_for(db, payment_id, month, person_id, cents, target)
+    if previous is None:
+        payment_id = db.execute("""
+            INSERT INTO payments(month, day, person_id, cents, note, arrears_target)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, values).lastrowid
+    else:
+        db.execute("""
+            UPDATE payments SET month=?, day=?, person_id=?, cents=?, note=?, arrears_target=? WHERE id=?
+        """, (*values, payment_id))
+    if not keep_allocations:
+        db.execute("DELETE FROM payment_allocations WHERE payment_id = ?", (payment_id,))
+        db.executemany("INSERT INTO payment_allocations VALUES (?, ?, ?)",
+                       [(payment_id, period, amount) for period, amount in allocations])
 
 
 def save_person(db, data):
@@ -330,7 +493,7 @@ def save_person(db, data):
         raise InputError("La persona non esiste più.")
 
 
-def route(environ, direct=False):
+def route(environ):
     method, path = environ["REQUEST_METHOD"], environ["PATH_INFO"]
     static = {
         "/": ("index.html", "text/html; charset=utf-8"),
@@ -340,15 +503,19 @@ def route(environ, direct=False):
     if method == "GET" and path in static:
         filename, mime = static[path]
         return "200 OK", mime, (ROOT / filename).read_bytes()
-    if method == "GET" and path == "/api/month":
-        month = parse_qs(environ["QUERY_STRING"], max_num_fields=8).get("month", [None])[0]
+    if method == "GET" and path in {"/api/month", "/api/arrears"}:
+        query = parse_qs(environ["QUERY_STRING"], max_num_fields=8)
+        month = valid_month(query.get("month", [None])[0])
         with database() as db:
             db.execute("BEGIN")
-            payload = month_data(db, valid_month(month))
-            payload["openBanking"] = not direct
-            return result(payload)
+            if path == "/api/arrears":
+                payment_id = query.get("exclude", [None])[0]
+                if payment_id is not None:
+                    payment_id = positive_int(int(payment_id))
+                return result(prior_balances(db, month, exclude_payment=payment_id))
+            return result(month_data(db, month))
     if method != "POST" or path not in {
-        "/api/expense", "/api/payment", "/api/person", "/api/remove", "/api/bank", "/api/open-banking"
+        "/api/expense", "/api/payment", "/api/person", "/api/remove", "/api/bank", "/api/bank/import"
     }:
         return result({"error": "Pagina non trovata."}, "404 Not Found")
     if (environ.get("HTTP_X_RENDICONTI") != "1"
@@ -360,19 +527,15 @@ def route(environ, direct=False):
     data = json.loads(environ["wsgi.input"].read(size))
     if not isinstance(data, dict):
         raise InputError("Richiesta non valida.")
-    if path == "/api/open-banking":
-        if direct:
-            return result({"error": "Apri il pannello Home Assistant per accedere a Open Banking."},
-                          "403 Forbidden")
-        action = data.get("action")
-        response = OPEN_BANKING.dispatch(action, data)
-        if action == "movements":
-            with database() as db:
-                mark_imported(db, response["movements"])
-        return result(response)
     with database() as db:
         if path == "/api/bank":
-            return result(bank_preview(db, clean_text(data.get("raw"), 1_000_000, required=True)))
+            db.execute("BEGIN")
+            if "xls" in data:
+                return result(xls_preview(db, data["xls"]))
+            return result(bank_preview(db, clean_text(data.get("raw"), MAX_BANK_FILE, required=True)))
+        db.execute("BEGIN IMMEDIATE")
+        if path == "/api/bank/import":
+            return result(import_movements(db, data))
         if path == "/api/expense":
             save_expense(db, data)
         elif path == "/api/payment":
@@ -438,10 +601,8 @@ def http_application(network, address, credential_digest):
 
 def serve(environ, start_response, direct=False):
     try:
-        status, mime, body = route(environ, direct)
-    except BankBusy as error:
-        status, mime, body = result({"error": str(error)}, "503 Service Unavailable")
-    except (InputError, csv.Error, BankError) as error:
+        status, mime, body = route(environ)
+    except (InputError, csv.Error) as error:
         status, mime, body = result({"error": str(error)}, "400 Bad Request")
     except (ValueError, UnicodeError, RecursionError):
         status, mime, body = result({"error": "Formato della richiesta non valido."}, "400 Bad Request")

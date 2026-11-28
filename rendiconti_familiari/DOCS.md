@@ -13,13 +13,16 @@ Home Assistant conserva i dati dell'app in `/data`. Per ritrovarli dopo un ripri
 
 ## Arretrati
 
-In ogni rendiconto vedi separatamente il residuo del mese e gli importi ancora da ricevere per i mesi precedenti. Gli arretrati mostrano il saldo aggiornato ai versamenti già registrati. Le spese e gli acconti rimangono nel loro mese di origine, anche se il pagamento avviene dopo. Un'eventuale eccedenza di un mese non compensa gli arretrati.
+Il rendiconto mostra il residuo del mese e gli importi ancora da ricevere per i mesi precedenti. Quando registri un versamento per una persona con arretrati, scegli se imputarlo al mese corrente, a un singolo mese precedente oppure agli arretrati dal più vecchio. L’eventuale eccedenza sul residuo degli arretrati selezionati resta sul mese del versamento. Il registro conserva la data effettiva dell’incasso e mostra i mesi a cui il pagamento è stato imputato.
 
-Da **Arretrati dei mesi precedenti**, usa **Registra acconto** per registrare un versamento sul mese indicato oppure **Apri mese** per vedere tutte le sue spese. Puoi modificare l'importo prima di salvare. Gli arretrati sono disponibili anche nella stampa da browser e in ScontrinoStudio 6.5.
+Da **Arretrati dei mesi precedenti**, usa **Registra versamento** per proporre il saldo del mese indicato oppure **Apri mese** per vedere spese e versamenti imputati a quel mese. La stampa e il file per ScontrinoStudio riportano separatamente il residuo del mese e gli arretrati.
 
-## Movimenti BPER
+## Importazione dei movimenti
 
-In **Importa movimenti** puoi caricare un CSV oppure incollare una tabella copiata da Excel o Numbers. In Smart Web, se trovi uno scarico Excel, aprilo sul Mac e copia le intestazioni e le colonne dei movimenti. Il sito mostra le uscite e ti lascia scegliere quali registrare. Gli altri movimenti del file non vengono archiviati. L'app segnala i movimenti già registrati quando ritrova la stessa data, descrizione e cifra. Per importi e descrizioni identici nello stesso giorno, mantiene distinte le occorrenze presenti nel medesimo elenco.
+1. In **Importa movimenti**, carica il file Excel **.xls** esportato da BPER Smart Web o un CSV. Puoi anche incollare una tabella con intestazioni.
+2. Seleziona il mese d’importazione. Il file BPER viene letto per **Data operazione** e mostra solo le uscite contabilizzate. I movimenti già importati sono indicati nell’anteprima. Controlla le righe segnalate come possibili doppioni per data e importo.
+3. Spunta le spese da registrare e scegli a chi addebitarle. Mamma e Papà dividono la spesa in parti uguali. Scegli un singolo nome per addebitargli l’intera spesa oppure **Più persone** per dividerla tra gli intestatari scelti. Usa **Gestisci persone** per aggiungere o rinominare un intestatario direttamente dall’importazione.
+4. Premi **Salva selezione**. Soltanto le uscite selezionate vengono salvate nel registro. Gli intestatari sono disponibili anche nella stampa individuale o complessiva.
 
 Esempio di CSV di prova:
 
@@ -29,15 +32,15 @@ Data;Descrizione;Importo
 06/11/2026;Bonifico ricevuto;30,00
 ```
 
-Importo negativo significa uscita. Una colonna **Uscite** può invece contenere importi positivi. Se Smart Web offre soltanto un PDF, usa l'inserimento manuale o copia le righe in un foglio con le tre intestazioni indicate. Per leggere i movimenti dal conto senza un file puoi attivare il collegamento Open Banking descritto qui sotto.
+Importo negativo significa uscita. Una colonna **Uscite** può invece contenere importi positivi. Se Smart Web offre soltanto un PDF, usa l'inserimento manuale o copia le righe in un foglio con le tre intestazioni indicate.
 
-[Documentazione Home Assistant sulle app locali](https://contributors.home-assistant.io/apps/first-app/) · [Informativa PSD2 di BPER](https://www.bper.it/footer/informative-normative/psd2-la-nuova-normativa-sui-servizi-di-pagamento)
+[Documentazione Home Assistant sulle app locali](https://contributors.home-assistant.io/apps/first-app/)
 
 ## Accesso locale e via VPN
 
 Puoi aprire **Rendiconti** dal pannello di Home Assistant. Fuori casa connettiti prima alla VPN e apri Home Assistant al suo indirizzo abituale. Usa un indirizzo HTTPS con certificato valido se configurato. Quando la VPN termina sul router, HTTPS protegge anche il tratto tra router e Raspberry.
 
-Prima dell’aggiornamento, verifica di poter aprire Home Assistant via VPN e crea un backup cifrato che includa l’app. Mantieni la modalità di protezione attiva. L’aggiornamento conserva database, configurazione bancaria e filtro utente. La versione 1.5.0 aggiunge un accesso diretto distinto, descritto sotto. Rimuovi dal router e da eventuali proxy le vecchie regole che pubblicavano l’add-on. Dopo l’aggiornamento verifica l’apertura dal pannello in LAN e via VPN.
+Prima dell’aggiornamento, verifica di poter aprire Home Assistant via VPN e crea un backup cifrato che includa l’app. Mantieni la modalità di protezione attiva. L’aggiornamento conserva il database e il filtro utente. Rimuovi dal router e da eventuali proxy le vecchie regole che pubblicavano l’add-on. Dopo l’aggiornamento verifica l’apertura dal pannello in LAN e via VPN.
 
 ## Accesso diretto HTTPS in LAN
 
@@ -49,7 +52,7 @@ L’accesso diretto è facoltativo. Usa un nome DNS dedicato che in LAN risolve 
 4. Dalla LAN apri `https://nome-scelto:8443`. Verifica che Safari riconosca il certificato prima di inserire la password. Lascia chiusi l’inoltro della porta sul router e sul proxy, e limita l’accesso alla LAN prevista nel firewall. Sui dispositivi condivisi usa una finestra privata e chiudila a fine lavoro, perché il browser può conservare le credenziali HTTP Basic per la sessione.
 5. Al rinnovo sostituisci certificato e chiave, poi riavvia l’app. Verifica il nuovo certificato dal browser. Per disattivare l’accesso, spegni `lan_https`, svuota il mapping di rete e riavvia.
 
-Spese, versamenti, importazione CSV ed esportazione usano lo stesso registro del pannello. La connessione bancaria tramite Enable Banking resta disponibile dal pannello Home Assistant. [Convalida DNS-01](https://letsencrypt.org/docs/challenge-types/#dns-01-challenge)
+Spese, versamenti, importazione ed esportazione usano lo stesso registro del pannello. [Convalida DNS-01](https://letsencrypt.org/docs/challenge-types/#dns-01-challenge)
 
 ## Stampa con ScontrinoStudio per Mac
 
@@ -59,19 +62,6 @@ Spese, versamenti, importazione CSV ed esportazione usano lo stesso registro del
 
 Il file contiene le quote, i versamenti e i saldi che hai scelto di stampare. L'apertura non stampa automaticamente e non carica il file su Notion. Dal sito puoi ancora usare **Apri stampa** per stampare direttamente dal browser.
 
-## BPER tramite Enable Banking
+## Rimozione del collegamento bancario
 
-La funzione consulta, su richiesta, le uscite in euro già contabilizzate del mese che stai visualizzando. Per avviarla, apri il rendiconto dal pannello Home Assistant. Per un accesso remoto usa la VPN e, quando configurato, l’indirizzo HTTPS di Home Assistant.
-
-### Prima configurazione
-
-1. In **Importa movimenti → Open Banking**, premi **Genera e scarica certificato pubblico**. La chiave privata viene creata e conservata sul Raspberry in `/data`. Il file che scarichi è il certificato pubblico.
-2. Accedi al [pannello di Enable Banking](https://enablebanking.com/sign-in/) e registra una nuova applicazione **Production**. Scegli il caricamento di un certificato e usa il file appena scaricato. Nel campo **Allowed Redirect URL** inserisci l’indirizzo HTTPS che vedi in Rendiconti, di default `https://localhost:28787/rendiconti-bper`. Se il pannello accetta l’alternativa `https://127.0.0.1:28787/rendiconti-bper`, seleziona lo stesso indirizzo anche in Rendiconti.
-3. In Enable Banking attiva la modalità riservata ai propri conti (**Activate by linking accounts**) e collega il tuo conto personale scegliendo **BPER Banca**. Il pannello potrebbe chiedere dettagli sull’app durante la registrazione. Le condizioni e l’informativa del fornitore si consultano prima di dare il consenso.
-4. Copia l’**Application ID** da Enable Banking, incollalo in Rendiconti e salva. Premi **Collega BPER**, poi **Continua su Enable Banking e BPER**. Autorizza la consultazione dei movimenti sulla pagina di BPER.
-5. Dopo il consenso il browser apre l’indirizzo di rientro locale. È normale che non ci sia un sito in ascolto a quell’indirizzo. Copia tutto l’URL dalla barra del browser e incollalo **solo** nel campo di rientro dentro Rendiconti, mentre l’autorizzazione è in corso. Premi **Completa collegamento**.
-6. Premi **Aggiorna movimenti** e usa **Usa** accanto a una spesa familiare. Controlla importo e quote, poi salva. I movimenti visualizzati in anteprima restano temporanei. Il sito segnala i movimenti già importati e i possibili doppioni per data e importo.
-
-L’app chiede un consenso fino a 30 giorni, compatibilmente con i limiti indicati dal fornitore per BPER. Alla scadenza o se il consenso viene revocato, scollega e ripeti l’autorizzazione. **Scollega conto** richiede a Enable Banking di chiudere la sessione. Se vuoi accertarti che il consenso sia revocato anche lato banca, verificalo direttamente con BPER. I dati salvati nei rendiconti rimangono nel registro. Tieni privati i backup dell’app, che possono contenere la chiave e la sessione bancaria.
-
-[Documentazione di Enable Banking per l’uso personale](https://enablebanking.com/docs/api/linked-accounts/) · [Supporto BPER](https://enablebanking.com/docs/markets/it/#bper-banca)
+Dalla versione 1.6.0, Rendiconti importa i movimenti dai file. Al primo avvio vengono rimossi i file locali di configurazione, sessione e certificato della vecchia integrazione. Le spese già salvate restano nel database. Se avevi autorizzato l’accesso al conto, revoca anche il consenso presso BPER o Enable Banking. I backup delle versioni precedenti possono contenere le credenziali della vecchia integrazione.

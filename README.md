@@ -1,6 +1,6 @@
 # Rendiconti familiari per Home Assistant OS
 
-App locale per registrare spese anticipate per familiari, ripartire le quote e tenere traccia dei versamenti per mese. Include l'importazione di uscite da CSV o da una tabella e la stampa su rotoli termici da 58 o 80 mm.
+App locale per registrare spese anticipate per familiari, ripartire le quote e tenere traccia dei versamenti per mese. Include l'importazione di uscite da Excel .xls, CSV o da una tabella e la stampa su rotoli termici da 58 o 80 mm.
 
 ## Installazione
 
