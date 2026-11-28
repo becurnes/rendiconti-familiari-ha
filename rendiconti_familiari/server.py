@@ -9,9 +9,9 @@ import json
 import os
 import re
 import sqlite3
-import struct
 import subprocess
 import sys
+import threading
 import unicodedata
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -19,7 +19,6 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import parse_qs
 
-import xlrd
 from waitress.server import create_server
 
 from lan_https import start_gateway
@@ -35,6 +34,7 @@ MAX_BANK_FILE = 1_000_000
 MAX_BANK_ROWS = 2000
 MAX_REQUEST_BODY = 2_500_000
 LAN_HTTP_PORT = 8100
+XLS_READER_SLOT = threading.BoundedSemaphore(1)
 
 
 @contextmanager
@@ -275,17 +275,6 @@ def movement_columns(record):
     return None
 
 
-def sheet_text(cell, datemode):
-    if cell.ctype == xlrd.XL_CELL_DATE:
-        try:
-            return xlrd.xldate_as_datetime(cell.value, datemode).date().isoformat()
-        except (ValueError, OverflowError):
-            return ""
-    if cell.ctype == xlrd.XL_CELL_NUMBER:
-        return str(cell.value)
-    return cell.value if cell.ctype == xlrd.XL_CELL_TEXT else ""
-
-
 def xls_preview(db, encoded):
     try:
         raw = base64.b64decode(clean_text(encoded, 1_333_336, required=True), validate=True)
@@ -295,24 +284,29 @@ def xls_preview(db, encoded):
         raise InputError("Il file supera 1 MB.")
     if not raw.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
         raise InputError("Seleziona un file Excel .xls esportato dalla banca.")
+    if not XLS_READER_SLOT.acquire(blocking=False):
+        raise InputError("È già in corso la lettura di un file Excel. Riprova tra poco.")
     try:
-        book = xlrd.open_workbook(file_contents=raw, logfile=io.StringIO(), on_demand=True,
-                                  ragged_rows=True, use_mmap=False)
-        try:
-            for sheet_index in range(min(book.nsheets, 10)):
-                sheet = book.sheet_by_index(sheet_index)
-                if sheet.nrows > 10_000 or sheet.ncols > 64:
-                    raise InputError("Il foglio Excel è troppo grande. Esporta un periodo più breve.")
-                records = ([sheet_text(cell, book.datemode) for cell in record] for record in sheet.get_rows())
-                for _, record in zip(range(35), records):
-                    mapping = movement_columns(record)
-                    if mapping:
-                        return collect_movements(db, records, mapping)
-        finally:
-            book.release_resources()
-    except (xlrd.XLRDError, xlrd.compdoc.CompDocError, struct.error, AssertionError,
-            IndexError, KeyError, ValueError, OverflowError, TypeError):
-        raise InputError("Il file Excel è danneggiato, protetto o in un formato non supportato.") from None
+        process = subprocess.run(
+            [sys.executable, "-I", "-B", str(ROOT / "xls_reader.py")],
+            input=raw, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True,
+            timeout=4, cwd=ROOT, env={"LANG": "C.UTF-8"},
+        )
+    except subprocess.TimeoutExpired:
+        raise InputError("Lettura Excel interrotta. Esporta un periodo più breve.") from None
+    except (subprocess.CalledProcessError, OSError):
+        raise InputError("Il file Excel è danneggiato, troppo complesso o non supportato.") from None
+    finally:
+        XLS_READER_SLOT.release()
+    workbook = json.loads(process.stdout)
+    if workbook.get("too_large"):
+        raise InputError("Il foglio Excel è troppo grande. Esporta un periodo più breve.")
+    for sheet in workbook["sheets"]:
+        records = iter(sheet)
+        for _, record in zip(range(35), records):
+            mapping = movement_columns(record)
+            if mapping:
+                return collect_movements(db, records, mapping)
     raise InputError("Nel file Excel mancano le colonne di data, descrizione e importo.")
 
 
