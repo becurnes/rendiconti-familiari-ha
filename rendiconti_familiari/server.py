@@ -1,5 +1,7 @@
 import csv
 import hashlib
+import hmac
+import ipaddress
 import io
 import json
 import os
@@ -28,6 +30,7 @@ OPEN_BANKING = OpenBanking(DATA)
 MAX_CENTS = 99_999_999
 ALLOWED_USER = os.environ.get("RENDICONTI_ALLOWED_USER", "").strip()
 MAX_REQUEST_BODY = 2_500_000
+LAN_HTTP_PORT = 8100
 
 
 @contextmanager
@@ -409,6 +412,30 @@ def lan_application(environ, start_response):
     return serve(environ, start_response, direct=True)
 
 
+def http_application(network, address, credential_digest):
+    host = f"{address}:{LAN_HTTP_PORT}"
+    expected_origin = f"http://{host}"
+
+    def application(environ, start_response):
+        remote = environ.get("REMOTE_ADDR", "")
+        try:
+            client_allowed = ipaddress.IPv4Address(remote) in network
+        except ValueError:
+            client_allowed = False
+        if not client_allowed or environ.get("HTTP_HOST") != host:
+            return send(start_response, *result({"error": "Accesso LAN non autorizzato."}, "403 Forbidden"),
+                        direct=True)
+        scheme, _, credentials = environ.get("HTTP_AUTHORIZATION", "").partition(" ")
+        supplied = hashlib.sha256(credentials.encode("latin-1")).hexdigest()
+        if scheme.lower() != "basic" or not hmac.compare_digest(supplied, credential_digest):
+            return send(start_response, *result({"error": "Accedi a Rendiconti."}, "401 Unauthorized"),
+                        direct=True, extra_headers=[("WWW-Authenticate", 'Basic realm="Rendiconti familiari"')])
+        environ["HTTP_X_RENDICONTI_ORIGIN"] = expected_origin
+        return lan_application(environ, start_response)
+
+    return application
+
+
 def serve(environ, start_response, direct=False):
     try:
         status, mime, body = route(environ, direct)
@@ -428,9 +455,10 @@ def serve(environ, start_response, direct=False):
     return send(start_response, status, mime, body, direct=direct)
 
 
-def send(start_response, status, mime, body, direct=False):
+def send(start_response, status, mime, body, direct=False, extra_headers=()):
     frame_ancestors = "'none'" if direct else "'self'"
     start_response(status, [
+        *extra_headers,
         ("Content-Type", mime), ("Content-Length", str(len(body))), ("Cache-Control", "no-store"),
         ("X-Content-Type-Options", "nosniff"), ("Referrer-Policy", "no-referrer"),
         ("Content-Security-Policy", f"default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors {frame_ancestors}; form-action 'self'"),
@@ -451,6 +479,17 @@ def main():
     }
     ingress = create_server(application, map=socket_map, listen=f"{bind}:{port}",
                             threads=6, connection_limit=64, **limits)
+    http_address = os.environ.get("RENDICONTI_HTTP_ADDRESS")
+    if http_address and not DEMO:
+        try:
+            create_server(
+                http_application(ipaddress.IPv4Network(os.environ["RENDICONTI_HTTP_NETWORK"]),
+                                 http_address, os.environ["RENDICONTI_HTTP_CREDENTIAL_DIGEST"]),
+                map=socket_map, listen=f"0.0.0.0:{LAN_HTTP_PORT}", threads=4,
+                connection_limit=32, **limits,
+            )
+        except (KeyError, ValueError, OSError) as error:
+            print(f"Accesso HTTP LAN disattivato: {error}", file=sys.stderr)
     gateway = None
     runtime = os.environ.get("RENDICONTI_HTTPS_RUNTIME")
     if runtime and not DEMO:
