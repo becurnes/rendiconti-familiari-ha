@@ -5,7 +5,6 @@ import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from http.client import HTTPConnection
@@ -19,7 +18,6 @@ os.environ["RENDICONTI_DATA"] = sandbox.name
 
 import bootstrap
 import lan_https
-import openbanking
 import server
 
 
@@ -104,7 +102,7 @@ class LanTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "lan-fullchain.pem"):
                 lan_https.prepare_gateway(valid, 0, 0, Path(directory), runtime)
 
-    def test_lan_disables_banking_and_checks_post_origin(self):
+    def test_lan_rejects_old_banking_route_and_checks_post_origin(self):
         server.init_db()
         metadata = {
             "HTTP_X_RENDICONTI_ORIGIN": "https://rendiconti.example.test:8443",
@@ -121,59 +119,73 @@ class LanTest(unittest.TestCase):
 
         status, headers, payload = request("/api/month", "GET")
         self.assertEqual(status, "200 OK")
-        self.assertFalse(payload["openBanking"])
+        self.assertNotIn("openBanking", payload)
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
         valid_origin = metadata["HTTP_X_RENDICONTI_ORIGIN"]
         self.assertEqual(request("/api/open-banking", "POST", valid_origin,
-                                 b'{"action":"status"}')[0], "403 Forbidden")
+                                 b'{"action":"status"}')[0], "404 Not Found")
         csv_body = b'{"raw":"Data;Descrizione;Importo"}'
         self.assertEqual(request("/api/bank", "POST", "https://other.example.test", csv_body)[0], "403 Forbidden")
         self.assertEqual(request("/api/bank", "POST", valid_origin, csv_body)[0], "200 OK")
 
 
-class BankTest(unittest.TestCase):
-    def test_busy_connection_keeps_status_available(self):
-        with tempfile.TemporaryDirectory() as directory:
-            bank = openbanking.OpenBanking(Path(directory))
-            started = threading.Event()
-            release = threading.Event()
+class LedgerTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        database = patch.object(server, "DB", Path(temporary.name) / "test.sqlite3")
+        database.start()
+        self.addCleanup(database.stop)
+        server.init_db()
 
-            def busy(*args):
-                started.set()
-                release.wait(3)
-                return "completed"
+    def test_preview_and_batch_import(self):
+        sample = (
+            "Data operazione;Descrizione;Entrate;Uscite;Stato\n"
+            "10 novembre 2026;Spesa;;-2,01;Contabilizzato\n"
+            "10 novembre 2026;Spesa;;-2,01;Contabilizzato\n"
+            "11 novembre 2026;In arrivo;;-3,20;Da contabilizzare\n"
+            "12 novembre 2026;Bonifico;30,00;-;Contabilizzato\n"
+            ";Totale;;-7,22;"
+        )
+        with server.database() as db:
+            server.save_person(db, {"name": "Persona esterna"})
+            preview = server.bank_preview(db, sample)
+            self.assertEqual((preview["pending"], preview["skipped"]), (1, 0))
+            first, second = preview["movements"]
+            self.assertNotEqual(first["key"], second["key"])
+            self.assertEqual(server.month_data(db, "2026-11")["expenses"], [])
+            server.import_movements(db, {"month": "2026-11", "movements": [
+                {**first, "people": [3]}, {**second, "people": [1, 3]},
+            ]})
+            expenses = server.month_data(db, "2026-11")["expenses"]
+            self.assertEqual(expenses[0]["shares"], [{"person_id": 3, "cents": 201}])
+            self.assertEqual(expenses[1]["shares"], [
+                {"person_id": 1, "cents": 101}, {"person_id": 3, "cents": 100},
+            ])
+            self.assertTrue(all(item["imported"] for item in server.bank_preview(db, sample)["movements"]))
 
-            with patch.object(bank, "run_action", side_effect=busy):
-                worker = threading.Thread(target=bank.dispatch, args=("movements", {}))
-                worker.start()
-                try:
-                    self.assertTrue(started.wait(2))
-                    self.assertFalse(bank.dispatch("status", {})["connected"])
-                    with self.assertRaises(openbanking.BankBusy):
-                        bank.dispatch("disconnect", {})
-                finally:
-                    release.set()
-                    worker.join(3)
-            self.assertFalse(worker.is_alive())
-
-    def test_bank_transport_deadline_and_revocation(self):
-        with tempfile.TemporaryDirectory() as directory:
-            bank = openbanking.OpenBanking(Path(directory))
-            with patch.object(openbanking, "openssl", return_value=b"signature"), \
-                 patch.object(openbanking.subprocess, "run") as run:
-                run.return_value = subprocess.CompletedProcess(
-                    [], 0, b'{"code":"REVOKED_SESSION"}\n403', b'')
-                with self.assertRaises(openbanking.BankError) as error:
-                    bank.api({"application": "demo"}, "POST", "/sessions", {"code": "test-code"},
-                             deadline=time.monotonic() + 2)
-                self.assertTrue(error.exception.expired)
-                self.assertLessEqual(run.call_args.kwargs["timeout"], 2)
-                self.assertIn(b"test-code", run.call_args.kwargs["input"])
-                self.assertNotIn("test-code", " ".join(run.call_args.args[0]))
-                with self.assertRaises(openbanking.BankError):
-                    bank.api({"application": "demo"}, "GET", "/aspsps",
-                             deadline=time.monotonic() - 1)
-                self.assertEqual(run.call_count, 1)
+    def test_payment_allocation_preserves_the_month_of_collection(self):
+        with server.database() as db:
+            for month, cents in (("2026-09", 1250), ("2026-10", 1000)):
+                server.save_expense(db, {
+                    "month": month, "day": month + "-01", "description": "Utenza",
+                    "cents": cents, "people": [1],
+                })
+            server.save_payment(db, {
+                "month": "2026-11", "day": "2026-11-20", "person_id": 1,
+                "cents": 3000, "arrears_target": "all",
+            })
+            current = server.month_data(db, "2026-11")
+            self.assertEqual(current["arrears"], [])
+            self.assertEqual(current["payments"][0]["cents"], 3000)
+            self.assertEqual(current["credits"][0]["cents"], 750)
+            self.assertEqual(current["payments"][0]["allocations"], [
+                {"month": "2026-09", "cents": 1250}, {"month": "2026-10", "cents": 1000},
+            ])
+            old_credit = server.month_data(db, "2026-10")["credits"][0]
+            self.assertEqual((old_credit["recorded_month"], old_credit["day"]), ("2026-11", "2026-11-20"))
+            db.execute("DELETE FROM payments WHERE id = ?", (current["payments"][0]["id"],))
+            self.assertEqual([row["cents"] for row in server.prior_balances(db, "2026-11")], [1250, 1000])
 
 
 class VolumeTest(unittest.TestCase):
@@ -182,7 +194,10 @@ class VolumeTest(unittest.TestCase):
             path = Path(directory)
             (path / "options.json").write_text('{"utente_autorizzato":"titolare"}')
             (path / "rendiconti.sqlite3").write_bytes(b"volume di prova")
+            for name in bootstrap.LEGACY_BANK_FILES:
+                (path / name).write_text("dati di prova")
             self.assertEqual(bootstrap.prepare_volume(path)["utente_autorizzato"], "titolare")
+            self.assertTrue(all(not (path / name).exists() for name in bootstrap.LEGACY_BANK_FILES))
             self.assertEqual((path / "rendiconti.sqlite3").read_bytes(), b"volume di prova")
             self.assertEqual((path / "rendiconti.sqlite3").stat().st_mode & 0o777, 0o600)
             self.assertEqual(path.stat().st_mode & 0o777, 0o700)
