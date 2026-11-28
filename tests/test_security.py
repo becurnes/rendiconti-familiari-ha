@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -137,6 +138,23 @@ class LedgerTest(unittest.TestCase):
         database.start()
         self.addCleanup(database.stop)
         server.init_db()
+
+    def test_corrupt_excel_stays_out_of_the_ledger(self):
+        invalid_workbook = base64.b64encode(bytes.fromhex("d0cf11e0a1b11ae1")).decode()
+        with server.database() as db:
+            with self.assertRaisesRegex(server.InputError, "danneggiato"):
+                server.xls_preview(db, invalid_workbook)
+            self.assertEqual(server.month_data(db, "2026-11")["expenses"], [])
+
+    def test_excel_timeout_releases_the_reader_slot(self):
+        invalid_workbook = base64.b64encode(bytes.fromhex("d0cf11e0a1b11ae1")).decode()
+        with server.database() as db, patch.object(
+            server.subprocess, "run", side_effect=subprocess.TimeoutExpired("xls_reader.py", 4)
+        ):
+            with self.assertRaisesRegex(server.InputError, "interrotta"):
+                server.xls_preview(db, invalid_workbook)
+        self.assertTrue(server.XLS_READER_SLOT.acquire(blocking=False))
+        server.XLS_READER_SLOT.release()
 
     def test_preview_and_batch_import(self):
         sample = (
