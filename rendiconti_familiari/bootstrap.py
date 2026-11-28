@@ -13,9 +13,9 @@ APP_UID = 10001
 APP_GID = 10001
 DATA_FILES = (
     "rendiconti.sqlite3", "rendiconti.sqlite3-wal", "rendiconti.sqlite3-shm",
-    "rendiconti.sqlite3-journal", "enablebanking-private.pem",
-    "enablebanking-public.crt", "enablebanking.json",
+    "rendiconti.sqlite3-journal",
 )
+LEGACY_BANK_FILES = ("enablebanking-private.pem", "enablebanking-public.crt", "enablebanking.json")
 SAFE_OPEN = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
 
 
@@ -54,6 +54,13 @@ def prepare_volume(path):
                     os.fchown(fd, APP_UID, APP_GID)
                 finally:
                     os.close(fd)
+        for name in LEGACY_BANK_FILES:
+            try:
+                os.unlink(name, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                print(f"Impossibile rimuovere il file bancario dismesso: {name}", file=sys.stderr)
         os.fchmod(directory, 0o700)
         os.fchown(directory, APP_UID, APP_GID)
         return settings
