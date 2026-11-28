@@ -1,5 +1,9 @@
 """Prepare the Supervisor volume, then irrevocably drop filesystem privileges."""
+import base64
+import hashlib
+import ipaddress
 import json
+import re
 import os
 import stat
 import subprocess
@@ -57,6 +61,29 @@ def prepare_volume(path):
         os.close(directory)
 
 
+def http_environment(settings):
+    if settings.get("lan_http") is not True:
+        return {}
+    from lan_https import private_network
+
+    network = private_network(settings.get("lan_ipv4"))
+    try:
+        address = ipaddress.IPv4Address(settings.get("lan_http_ip") or "")
+    except ValueError:
+        raise ValueError("Inserisci l’IPv4 locale di Home Assistant.") from None
+    if address not in network:
+        raise ValueError("L’IPv4 di Home Assistant deve essere nella sottorete LAN autorizzata.")
+    password = settings.get("lan_http_password")
+    if not isinstance(password, str) or not re.fullmatch(r"[!-~]{24,128}", password):
+        raise ValueError("Usa una password dedicata di 24–128 caratteri ASCII senza spazi.")
+    credentials = base64.b64encode(("rendiconti:" + password).encode("ascii"))
+    return {
+        "RENDICONTI_HTTP_ADDRESS": str(address),
+        "RENDICONTI_HTTP_NETWORK": str(network),
+        "RENDICONTI_HTTP_CREDENTIAL_DIGEST": hashlib.sha256(credentials).hexdigest(),
+    }
+
+
 def main():
     os.umask(0o077)
     sys.path.insert(0, "/app")
@@ -67,7 +94,12 @@ def main():
         runtime = prepare_gateway(settings, APP_UID, APP_GID)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         print(f"Accesso HTTPS LAN disattivato: {error}", file=sys.stderr)
-    # Supervisor options and environment are never exposed to the HTTP process.
+    try:
+        http = http_environment(settings)
+    except ValueError as error:
+        print(f"Accesso HTTP LAN disattivato: {error}", file=sys.stderr)
+        http = {}
+    # Pass only selected settings, including a digest rather than the HTTP password.
     os.setgroups([])
     os.setgid(APP_GID)
     os.setuid(APP_UID)
@@ -78,6 +110,7 @@ def main():
         "LANG": "C.UTF-8",
         "RENDICONTI_ALLOWED_USER": settings.get("utente_autorizzato") or "",
         "RENDICONTI_HTTPS_RUNTIME": runtime,
+        **http,
     })
 
 
