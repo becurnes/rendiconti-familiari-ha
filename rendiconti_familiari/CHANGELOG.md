@@ -1,3 +1,8 @@
+# 1.5.1
+
+- Accesso HTTP locale facoltativo tramite indirizzo IPv4, sottorete autorizzata e password dedicata.
+- Open Banking rimane accessibile dal pannello Home Assistant.
+
 # 1.5.0
 
 - Accesso facoltativo dalla LAN su HTTPS con certificato dedicato, filtro IPv4 e autenticazione separata.

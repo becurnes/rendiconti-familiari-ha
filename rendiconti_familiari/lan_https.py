@@ -23,7 +23,10 @@ def network_settings(options):
     labels = hostname.split(".")
     if not all(HOST_LABEL.fullmatch(label) for label in labels) or labels[-1].isdigit():
         raise ValueError("Il nome DNS deve usare lettere minuscole, numeri e trattini.")
-    raw_network = options.get("lan_ipv4") or ""
+    return hostname, private_network(options.get("lan_ipv4"))
+
+
+def private_network(raw_network):
     if not isinstance(raw_network, str) or "/" not in raw_network:
         raise ValueError("Inserisci la sottorete IPv4 locale in formato CIDR.")
     try:
@@ -32,7 +35,7 @@ def network_settings(options):
         raise ValueError("Sottorete LAN IPv4 non valida.") from None
     if network.prefixlen < 16 or not any(network.subnet_of(private) for private in PRIVATE_NETWORKS):
         raise ValueError("È necessaria una sottorete LAN IPv4 privata con prefisso da /16 a /32.")
-    return hostname, network
+    return network
 
 
 def read_asset(directory, name, limit):
